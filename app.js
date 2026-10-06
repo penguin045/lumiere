@@ -78,6 +78,22 @@
       }
       return smoothstep(0.17, 0.37 + uCastSoftness * 0.06, blocker - receiverDepth);
     }
+    float backlightOcclusionAt(vec2 uv, float receiverDepth, vec2 lightPosition, float lightDistance, vec2 edgeStep) {
+      vec2 ray = lightPosition - uv;
+      float start = clamp(length(edgeStep * 2.0) / max(length(ray), 0.001), 0.08, 0.42);
+      // The map is white in front; moving a rear light farther away lowers its depth.
+      float lightDepth = 1.0 - lightDistance;
+      float leftReceiver = 0.0;
+      float occlusion = 0.0;
+      for (int stepIndex = 0; stepIndex < 6; stepIndex++) {
+        float alongRay = mix(start, 0.92, float(stepIndex) / 5.0);
+        float blockerDepth = texture2D(uDepthMap, uv + ray * alongRay).r;
+        // Skip the lit surface itself, then test surfaces between it and the light.
+        leftReceiver = max(leftReceiver, 1.0 - smoothstep(receiverDepth - 0.1, receiverDepth - 0.03, blockerDepth));
+        occlusion = max(occlusion, leftReceiver * smoothstep(0.04, 0.16, blockerDepth - lightDepth));
+      }
+      return occlusion;
+    }
     void main() {
       vec4 source = texture2D(uImage, vUv);
       float depth = texture2D(uDepthMap, vUv).r;
@@ -149,6 +165,7 @@
                               downDepth - upDepth + downSample.a - upSample.a);
           float facing = max(dot(normalize(outward + vec2(0.00001)), normalize(delta + vec2(0.00001))), 0.0);
           float rim = smoothstep(0.035, 0.24, max(depthEdge * 1.5, alphaEdge)) * facing;
+          if (rim > 0.001) rim *= 1.0 - backlightOcclusionAt(vUv, depth, light.xy, light.z, edgeStep);
           vec3 edgeColor = mix(source.rgb, vec3(1.0), 0.68);
           directColor += edgeColor * lightTint * rim * falloff * light.w * 1.45;
           rearIntensity += light.w;
@@ -527,7 +544,7 @@
       $(id).setAttribute('aria-pressed', String(active));
     }
     $('lightDepthFarLabel').textContent = state.backlight ? '背後に離す' : '手前に離す';
-    $('lightDepthNote').textContent = state.backlight ? '背後に離すほど輪郭の光が広がります。' : '画像面に近いほど落ち影が長くなります。';
+    $('lightDepthNote').textContent = state.backlight ? '背後に離すほど輪郭が広がり、手前の層に遮られやすくなります。' : '画像面に近いほど落ち影が長くなります。';
     document.querySelectorAll('[data-cast-preset]').forEach(button => {
       const preset = castPresets[button.dataset.castPreset];
       button.classList.toggle('active', state.castStrength === preset.castStrength && state.castSoftness === preset.castSoftness);
