@@ -1,8 +1,11 @@
 (() => {
   'use strict';
 
-  const defaults = { x: 0.68, y: 0.31, intensity: 80, spread: 65, lightHeight: 55, temperature: 5500, relief: 35, normalStrength: 100, shadow: 40, depthStrength: 45, castStrength: 0, castSoftness: 70 };
-  const state = { ...defaults, compare: false, before: false, depthPreview: false, normalPreview: false, split: 0.5, image: null, imageName: 'サンプルイラスト', depthEditing: false, depthBusy: false, hasEstimatedDepth: false, brushMode: 'near', brushSize: 10 };
+  const MAX_LIGHTS = 4;
+  const lightKeys = ['x', 'y', 'intensity', 'spread', 'lightHeight', 'temperature'];
+  const lightDefaults = { x: 0.68, y: 0.31, intensity: 80, spread: 65, lightHeight: 55, temperature: 5500 };
+  const defaults = { ...lightDefaults, relief: 35, normalStrength: 100, shadow: 40, depthStrength: 45, castStrength: 0, castSoftness: 70 };
+  const state = { ...defaults, lights: [{ ...lightDefaults }], selectedLightIndex: 0, compare: false, before: false, depthPreview: false, normalPreview: false, split: 0.5, image: null, imageName: 'サンプルイラスト', depthEditing: false, depthBusy: false, hasEstimatedDepth: false, brushMode: 'near', brushSize: 10 };
   const $ = (id) => document.getElementById(id);
   const canvas = $('canvas');
   const artboard = $('artboard');
@@ -19,6 +22,7 @@
   const normalDepthCanvas = document.createElement('canvas');
   const normalDepthContext = normalDepthCanvas.getContext('2d');
   let normalUpdateQueued = false;
+  let normalWasm = null;
   let estimatorPromise = null;
   let inferenceQueue = Promise.resolve();
   let depthGeneration = 0;
@@ -39,17 +43,15 @@
     uniform sampler2D uDepthMap;
     uniform sampler2D uNormalMap;
     uniform vec2 uTexel;
-    uniform vec2 uLight;
-    uniform float uIntensity;
-    uniform float uSpread;
-    uniform float uTemperature;
+    uniform vec4 uLightGeometry[${MAX_LIGHTS}];
+    uniform vec2 uLightAppearance[${MAX_LIGHTS}];
+    uniform int uLightCount;
     uniform float uRelief;
     uniform float uNormalStrength;
     uniform float uShadow;
     uniform float uDepthStrength;
     uniform float uCastStrength;
     uniform float uCastSoftness;
-    uniform float uLightHeight;
     uniform float uShowDepth;
     uniform float uShowNormal;
     uniform float uAspect;
@@ -61,9 +63,9 @@
       vec4 p = texture2D(uImage, clamp(uv, vec2(0.0), vec2(1.0)));
       return dot(p.rgb, vec3(0.299, 0.587, 0.114)) * 0.76 + p.a * 0.24;
     }
-    float castShadowAt(vec2 uv, float receiverDepth) {
-      float projection = 1.0 + mix(0.82, 0.12, uLightHeight) * mix(0.55, 1.0, uCastStrength);
-      vec2 sampleUv = uLight + (uv - uLight) / projection;
+    float castShadowAt(vec2 uv, float receiverDepth, vec2 lightPosition, float lightDepth) {
+      float projection = 1.0 + mix(0.82, 0.12, lightDepth) * mix(0.55, 1.0, uCastStrength);
+      vec2 sampleUv = lightPosition + (uv - lightPosition) / projection;
       if (sampleUv.x <= 0.0 || sampleUv.x >= 1.0 || sampleUv.y <= 0.0 || sampleUv.y >= 1.0) return 0.0;
       float blocker = texture2D(uDepthMap, sampleUv).r;
       if (uCastSoftness > 0.01) {
@@ -106,28 +108,44 @@
       vec2 mappedSlope = mappedNormal.xy / max(mappedNormal.z, 0.1);
       vec3 normal = normalize(vec3(dx * uRelief * 7.5 + mappedSlope.x * uNormalStrength,
                                    dy * uRelief * 7.5 + mappedSlope.y * uNormalStrength, 1.0));
-      vec2 delta = vec2((uLight.x - vUv.x) * uAspect, uLight.y - vUv.y);
-      float dist = length(delta);
-      vec3 lightDirection = normalize(vec3(delta * 1.3, mix(0.25, 0.82, uLightHeight)));
-      float diffuse = max(dot(normal, lightDirection), 0.0);
-      float falloff = exp(-dist * dist / max(0.035, uSpread * uSpread * 0.52));
-      float reliefShade = (diffuse - 0.72) * uRelief * 0.78;
       float depthBias = (depth - 0.5) * uDepthStrength;
-      float ambient = 1.0 - uShadow * 0.27 + reliefShade * (0.3 + uShadow * 0.7) + depthBias * 0.38;
-      float illumination = uIntensity * falloff * (0.30 + diffuse * 0.28) * (1.0 + depthBias * 0.9);
-
-      float warmth = clamp((5500.0 - uTemperature) / 3000.0, 0.0, 1.0);
-      float coolness = clamp((uTemperature - 5500.0) / 3500.0, 0.0, 1.0);
+      float ambient = 1.0 - uShadow * 0.27 + depthBias * 0.38;
+      float warmth = clamp((5500.0 - uLightAppearance[0].y) / 3000.0, 0.0, 1.0);
+      float coolness = clamp((uLightAppearance[0].y - 5500.0) / 3500.0, 0.0, 1.0);
       vec3 tint = vec3(1.0) + warmth * vec3(0.11, 0.005, -0.19) + coolness * vec3(-0.13, -0.025, 0.17);
-      vec3 lightTint = vec3(1.0) + warmth * vec3(0.12, -0.035, -0.22) + coolness * vec3(-0.20, -0.035, 0.19);
       vec3 color = source.rgb * max(0.0, ambient) * tint;
-      color += source.rgb * illumination * lightTint;
       color = mix(color, vec3(dot(color, vec3(0.299, 0.587, 0.114))), (1.0 - depth) * uDepthStrength * 0.08);
-      color += vec3(1.0) * pow(max(diffuse, 0.0), 7.0) * falloff * uRelief * uIntensity * 0.07 * lightTint;
-      if (uCastStrength > 0.001) {
-        float castAmount = castShadowAt(vUv, depth);
-        color *= 1.0 - castAmount * uCastStrength * (0.64 + uShadow * 0.25);
+      vec3 directColor = vec3(0.0);
+      float totalIntensity = 0.0;
+      float blockedIntensity = 0.0;
+      for (int i = 0; i < ${MAX_LIGHTS}; i++) {
+        if (i >= uLightCount) break;
+        vec4 light = uLightGeometry[i];
+        vec2 appearance = uLightAppearance[i];
+        vec2 delta = vec2((light.x - vUv.x) * uAspect, light.y - vUv.y);
+        float distanceToLight = length(delta);
+        float surfaceDepth = depth * uDepthStrength * 0.18;
+        float heightAboveSurface = max(0.08, mix(0.25, 0.82, light.z) - surfaceDepth);
+        vec3 lightDirection = normalize(vec3(delta * 1.3, heightAboveSurface));
+        float diffuse = max(dot(normal, lightDirection), 0.0);
+        float spread = appearance.x * mix(0.78, 1.18, light.z);
+        float falloff = exp(-distanceToLight * distanceToLight / max(0.035, spread * spread * 0.52));
+        float illumination = light.w * falloff * (0.30 + diffuse * 0.28) * (1.0 + depthBias * 0.9);
+        float reliefShade = (diffuse - 0.72) * uRelief * 0.78 * (0.3 + uShadow * 0.7) * falloff * light.w;
+        float lightWarmth = clamp((5500.0 - appearance.y) / 3000.0, 0.0, 1.0);
+        float lightCoolness = clamp((appearance.y - 5500.0) / 3500.0, 0.0, 1.0);
+        vec3 lightTint = vec3(1.0) + lightWarmth * vec3(0.12, -0.035, -0.22) + lightCoolness * vec3(-0.20, -0.035, 0.19);
+        vec3 contribution = source.rgb * (illumination + reliefShade) * lightTint;
+        contribution += vec3(1.0) * pow(diffuse, 7.0) * falloff * uRelief * light.w * 0.07 * lightTint;
+        totalIntensity += light.w;
+        if (uCastStrength > 0.001) {
+          float occlusion = castShadowAt(vUv, depth, light.xy, light.z);
+          blockedIntensity += occlusion * light.w;
+          contribution *= 1.0 - occlusion * uCastStrength * (0.64 + uShadow * 0.25);
+        }
+        directColor += contribution;
       }
+      color = color * (1.0 - blockedIntensity / max(totalIntensity, 0.001) * uCastStrength * (0.64 + uShadow * 0.25)) + directColor;
       gl_FragColor = vec4(clamp(color, 0.0, 1.0), source.a);
     }
   `;
@@ -180,7 +198,9 @@
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 255, 255]));
     gl.activeTexture(gl.TEXTURE0);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    uniforms = Object.fromEntries(['uImage', 'uDepthMap', 'uNormalMap', 'uTexel', 'uLight', 'uIntensity', 'uSpread', 'uTemperature', 'uRelief', 'uNormalStrength', 'uShadow', 'uDepthStrength', 'uCastStrength', 'uCastSoftness', 'uLightHeight', 'uShowDepth', 'uShowNormal', 'uAspect', 'uCompare', 'uBefore', 'uSplit'].map(name => [name, gl.getUniformLocation(program, name)]));
+    uniforms = Object.fromEntries(['uImage', 'uDepthMap', 'uNormalMap', 'uTexel', 'uLightCount', 'uRelief', 'uNormalStrength', 'uShadow', 'uDepthStrength', 'uCastStrength', 'uCastSoftness', 'uShowDepth', 'uShowNormal', 'uAspect', 'uCompare', 'uBefore', 'uSplit'].map(name => [name, gl.getUniformLocation(program, name)]));
+    uniforms.uLightGeometry = gl.getUniformLocation(program, 'uLightGeometry[0]');
+    uniforms.uLightAppearance = gl.getUniformLocation(program, 'uLightAppearance[0]');
     gl.uniform1i(uniforms.uImage, 0);
     gl.uniform1i(uniforms.uDepthMap, 1);
     gl.uniform1i(uniforms.uNormalMap, 2);
@@ -196,6 +216,76 @@
     toast.classList.add('visible');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toast.classList.remove('visible'), 3000);
+  }
+
+  function selectedLight() {
+    return state.lights[state.selectedLightIndex];
+  }
+
+  function syncSelectedLight() {
+    const light = selectedLight();
+    for (const key of lightKeys) state[key] = light[key];
+  }
+
+  function saveSelectedLight() {
+    const light = selectedLight();
+    for (const key of lightKeys) light[key] = state[key];
+  }
+
+  function selectLight(index) {
+    if (index < 0 || index >= state.lights.length) return;
+    state.selectedLightIndex = index;
+    syncSelectedLight();
+    updateControlUI();
+    render();
+  }
+
+  function updateLightUI() {
+    const list = $('lightList');
+    if (list.children.length !== state.lights.length) {
+      list.replaceChildren(...state.lights.map((_, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'light-item';
+        button.dataset.lightIndex = index;
+        const dot = document.createElement('span');
+        dot.className = 'light-item-dot';
+        const label = document.createElement('span');
+        label.textContent = `光源 ${index + 1}`;
+        const value = document.createElement('small');
+        value.className = 'light-item-value';
+        button.append(dot, label, value);
+        return button;
+      }));
+    }
+    $('lightCount').textContent = `${state.lights.length} / ${MAX_LIGHTS}`;
+    $('addLightButton').disabled = state.lights.length >= MAX_LIGHTS;
+    $('removeLightButton').disabled = state.lights.length <= 1;
+    const miniDots = $('otherMiniDots');
+    const otherHandles = $('otherLightHandles');
+    miniDots.replaceChildren();
+    otherHandles.replaceChildren();
+    state.lights.forEach((light, index) => {
+      const button = list.children[index];
+      const active = index === state.selectedLightIndex;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.querySelector('.light-item-value').textContent = `${light.intensity}%`;
+      button.querySelector('.light-item-dot').style.background = light.temperature < 5000 ? '#e7a46f' : light.temperature > 6500 ? '#a8c6ed' : '#e9dfc6';
+      if (active) return;
+      const miniDot = document.createElement('span');
+      miniDot.className = 'other-mini-dot';
+      miniDot.style.left = `${light.x * 100}%`;
+      miniDot.style.top = `${light.y * 100}%`;
+      miniDots.append(miniDot);
+      const handle = document.createElement('span');
+      handle.className = 'light-handle secondary';
+      handle.style.left = `${light.x * 100}%`;
+      handle.style.top = `${light.y * 100}%`;
+      handle.textContent = String(index + 1);
+      otherHandles.append(handle);
+    });
+    otherHandles.hidden = state.compare || state.before || state.depthEditing || state.depthPreview || state.normalPreview;
   }
 
   function uploadDepthMap() {
@@ -216,21 +306,39 @@
     const depthPixels = normalDepthContext.getImageData(0, 0, width, height).data;
     const result = normalContext.createImageData(width, height);
     const pixels = result.data;
-    const depthAt = (x, y) => depthPixels[(Math.max(0, Math.min(height - 1, y)) * width + Math.max(0, Math.min(width - 1, x))) * 4] / 255;
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const left = (depthAt(x - 4, y - 2) + depthAt(x - 4, y) + depthAt(x - 4, y + 2)) / 3;
-        const right = (depthAt(x + 4, y - 2) + depthAt(x + 4, y) + depthAt(x + 4, y + 2)) / 3;
-        const below = (depthAt(x - 2, y + 4) + depthAt(x, y + 4) + depthAt(x + 2, y + 4)) / 3;
-        const above = (depthAt(x - 2, y - 4) + depthAt(x, y - 4) + depthAt(x + 2, y - 4)) / 3;
-        const nx = (left - right) * 2.5;
-        const ny = (below - above) * 2.5;
-        const length = Math.hypot(nx, ny, 1);
-        const index = (y * width + x) * 4;
-        pixels[index] = Math.round((nx / length * 0.5 + 0.5) * 255);
-        pixels[index + 1] = Math.round((ny / length * 0.5 + 0.5) * 255);
-        pixels[index + 2] = Math.round((1 / length * 0.5 + 0.5) * 255);
-        pixels[index + 3] = 255;
+    let generatedWithWasm = false;
+    if (normalWasm) {
+      try {
+        const count = width * height * 4;
+        const input = new Uint8Array(normalWasm.memory.buffer, normalWasm.input_ptr(), count);
+        input.set(depthPixels);
+        if (normalWasm.generate_normals(width, height) === 1) {
+          pixels.set(new Uint8Array(normalWasm.memory.buffer, normalWasm.output_ptr(), count));
+          generatedWithWasm = true;
+        }
+      } catch (error) {
+        console.warn('法線マップのWASM処理を使えませんでした', error);
+        normalWasm = null;
+        document.documentElement.dataset.normalEngine = 'javascript';
+      }
+    }
+    if (!generatedWithWasm) {
+      const depthAt = (x, y) => depthPixels[(Math.max(0, Math.min(height - 1, y)) * width + Math.max(0, Math.min(width - 1, x))) * 4] / 255;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const left = (depthAt(x - 4, y - 2) + depthAt(x - 4, y) + depthAt(x - 4, y + 2)) / 3;
+          const right = (depthAt(x + 4, y - 2) + depthAt(x + 4, y) + depthAt(x + 4, y + 2)) / 3;
+          const below = (depthAt(x - 2, y + 4) + depthAt(x, y + 4) + depthAt(x + 2, y + 4)) / 3;
+          const above = (depthAt(x - 2, y - 4) + depthAt(x, y - 4) + depthAt(x + 2, y - 4)) / 3;
+          const nx = (left - right) * 2.5;
+          const ny = (below - above) * 2.5;
+          const length = Math.hypot(nx, ny, 1);
+          const index = (y * width + x) * 4;
+          pixels[index] = Math.round((nx / length * 0.5 + 0.5) * 255);
+          pixels[index + 1] = Math.round((ny / length * 0.5 + 0.5) * 255);
+          pixels[index + 2] = Math.round((1 / length * 0.5 + 0.5) * 255);
+          pixels[index + 3] = 255;
+        }
       }
     }
     normalContext.putImageData(result, 0, 0);
@@ -248,6 +356,20 @@
       normalUpdateQueued = false;
       updateNormalMap();
     });
+  }
+
+  async function loadNormalWasm() {
+    try {
+      const response = await fetch('./normal-map.wasm');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const { instance } = await WebAssembly.instantiate(await response.arrayBuffer());
+      normalWasm = instance.exports;
+      document.documentElement.dataset.normalEngine = 'wasm';
+      scheduleNormalMapUpdate();
+    } catch (error) {
+      document.documentElement.dataset.normalEngine = 'javascript';
+      console.warn('法線マップはJavaScriptで計算します', error);
+    }
   }
 
   function resetDepthMap() {
@@ -374,6 +496,7 @@
       const preset = castPresets[button.dataset.castPreset];
       button.classList.toggle('active', state.castStrength === preset.castStrength && state.castSoftness === preset.castSoftness);
     });
+    updateLightUI();
     $('miniMapDot').style.left = `${state.x * 100}%`;
     $('miniMapDot').style.top = `${state.y * 100}%`;
     $('miniMap').setAttribute('aria-valuenow', String(Math.round(state.x * 100)));
@@ -415,24 +538,28 @@
     const brushDiameter = Math.min(artboard.clientWidth, artboard.clientHeight) * state.brushSize / 100;
     $('depthBrushCursor').style.width = `${brushDiameter}px`;
     $('depthBrushCursor').style.height = `${brushDiameter}px`;
-    $('stageTip').textContent = state.depthEditing ? '白＝手前、黒＝奥。イラスト上をなぞって深度を指定' : state.depthPreview ? '深度マップを表示中：白＝手前、黒＝奥' : state.normalPreview ? '法線マップを表示中：色が面の向きを表します' : state.compare ? '境界線をドラッグして調整前後を比較' : 'イラスト上をクリック・ドラッグして光源を移動';
+    $('stageTip').textContent = state.depthEditing ? '白＝手前、黒＝奥。イラスト上をなぞって深度を指定' : state.depthPreview ? '深度マップを表示中：白＝手前、黒＝奥' : state.normalPreview ? '法線マップを表示中：色が面の向きを表します' : state.compare ? '境界線をドラッグして調整前後を比較' : '選択した光源をクリック・ドラッグして移動';
   }
 
   function render() {
     if (!state.image) return;
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.uniform2f(uniforms.uTexel, 1 / canvas.width, 1 / canvas.height);
-    gl.uniform2f(uniforms.uLight, state.x, 1 - state.y);
-    gl.uniform1f(uniforms.uIntensity, state.intensity / 100);
-    gl.uniform1f(uniforms.uSpread, state.spread / 100);
-    gl.uniform1f(uniforms.uTemperature, state.temperature);
+    const lightGeometry = new Float32Array(MAX_LIGHTS * 4);
+    const lightAppearance = new Float32Array(MAX_LIGHTS * 2);
+    state.lights.forEach((light, index) => {
+      lightGeometry.set([light.x, 1 - light.y, light.lightHeight / 100, light.intensity / 100], index * 4);
+      lightAppearance.set([light.spread / 100, light.temperature], index * 2);
+    });
+    gl.uniform4fv(uniforms.uLightGeometry, lightGeometry);
+    gl.uniform2fv(uniforms.uLightAppearance, lightAppearance);
+    gl.uniform1i(uniforms.uLightCount, state.lights.length);
     gl.uniform1f(uniforms.uRelief, state.relief / 100);
     gl.uniform1f(uniforms.uNormalStrength, state.normalStrength / 100);
     gl.uniform1f(uniforms.uShadow, state.shadow / 100);
     gl.uniform1f(uniforms.uDepthStrength, state.depthStrength / 100);
     gl.uniform1f(uniforms.uCastStrength, state.castStrength / 100);
     gl.uniform1f(uniforms.uCastSoftness, state.castSoftness / 100);
-    gl.uniform1f(uniforms.uLightHeight, state.lightHeight / 100);
     gl.uniform1f(uniforms.uShowDepth, Number(state.depthEditing || state.depthPreview));
     gl.uniform1f(uniforms.uShowNormal, Number(state.normalPreview));
     gl.uniform1f(uniforms.uAspect, canvas.width / canvas.height);
@@ -517,8 +644,23 @@
     const bounds = target.getBoundingClientRect();
     state.x = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
     state.y = Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height));
+    saveSelectedLight();
     updateControlUI();
     render();
+  }
+
+  function selectNearbyLight(event, target, radius) {
+    const bounds = target.getBoundingClientRect();
+    let nearest = -1;
+    let nearestDistance = radius;
+    state.lights.forEach((light, index) => {
+      const distance = Math.hypot(event.clientX - bounds.left - light.x * bounds.width, event.clientY - bounds.top - light.y * bounds.height);
+      if (distance < nearestDistance) {
+        nearest = index;
+        nearestDistance = distance;
+      }
+    });
+    if (nearest >= 0 && nearest !== state.selectedLightIndex) selectLight(nearest);
   }
 
   function setSplitFromEvent(event) {
@@ -564,14 +706,31 @@
 
   sliderIds.forEach(id => $(id).addEventListener('input', event => {
     state[id] = Number(event.target.value);
+    if (lightKeys.includes(id)) saveSelectedLight();
     updateControlUI();
     render();
   }));
   document.querySelectorAll('[data-temperature]').forEach(button => button.addEventListener('click', () => {
     state.temperature = Number(button.dataset.temperature);
+    saveSelectedLight();
     updateControlUI();
     render();
   }));
+  $('lightList').addEventListener('click', event => {
+    const button = event.target.closest('[data-light-index]');
+    if (button) selectLight(Number(button.dataset.lightIndex));
+  });
+  $('addLightButton').addEventListener('click', () => {
+    if (state.lights.length >= MAX_LIGHTS) return;
+    const current = selectedLight();
+    state.lights.push({ ...current, x: Math.max(0.08, Math.min(0.92, current.x - 0.23)), y: Math.max(0.08, Math.min(0.92, current.y + 0.13)), intensity: 25 });
+    selectLight(state.lights.length - 1);
+  });
+  $('removeLightButton').addEventListener('click', () => {
+    if (state.lights.length <= 1) return;
+    state.lights.splice(state.selectedLightIndex, 1);
+    selectLight(Math.min(state.selectedLightIndex, state.lights.length - 1));
+  });
   document.querySelectorAll('[data-cast-preset]').forEach(button => button.addEventListener('click', () => {
     Object.assign(state, castPresets[button.dataset.castPreset]);
     updateControlUI();
@@ -579,6 +738,8 @@
   }));
   $('resetButton').addEventListener('click', () => {
     Object.assign(state, defaults, { compare: false, before: false, depthPreview: false, normalPreview: false, split: 0.5 });
+    state.lights = [{ ...lightDefaults }];
+    state.selectedLightIndex = 0;
     state.depthEditing = false;
     state.brushMode = 'near';
     state.brushSize = 10;
@@ -633,7 +794,7 @@
     artboard.setPointerCapture(event.pointerId);
     if (pointerMode === 'split') setSplitFromEvent(event);
     else if (pointerMode === 'depth') { lastPaintPoint = null; moveBrushCursor(event); paintDepth(event); }
-    else setLightFromEvent(event, artboard);
+    else { selectNearbyLight(event, artboard, 32); setLightFromEvent(event, artboard); }
   });
   artboard.addEventListener('pointermove', event => {
     moveBrushCursor(event);
@@ -654,7 +815,7 @@
 
   const miniMap = $('miniMap');
   let movingMiniMap = false;
-  miniMap.addEventListener('pointerdown', event => { movingMiniMap = true; miniMap.setPointerCapture(event.pointerId); setLightFromEvent(event, miniMap); });
+  miniMap.addEventListener('pointerdown', event => { movingMiniMap = true; miniMap.setPointerCapture(event.pointerId); selectNearbyLight(event, miniMap, 13); setLightFromEvent(event, miniMap); });
   miniMap.addEventListener('pointermove', event => { if (movingMiniMap) setLightFromEvent(event, miniMap); });
   miniMap.addEventListener('pointerup', () => { movingMiniMap = false; });
   miniMap.addEventListener('pointercancel', () => { movingMiniMap = false; });
@@ -668,6 +829,7 @@
     event.preventDefault();
     state.x = Math.max(0, Math.min(1, state.x));
     state.y = Math.max(0, Math.min(1, state.y));
+    saveSelectedLight();
     updateControlUI();
     render();
   });
@@ -729,6 +891,7 @@
   window.addEventListener('resize', fitArtboard);
   new ResizeObserver(fitArtboard).observe(document.querySelector('.stage-center'));
   updateControlUI();
+  loadNormalWasm();
   const sample = new Image();
   sample.onload = () => setImage(sample, 'サンプルイラスト');
   sample.onerror = () => showToast('サンプルイラストを読み込めませんでした');

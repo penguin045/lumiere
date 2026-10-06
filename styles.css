@@ -40,3 +40,24 @@
 .look-preset:hover{border-color:#bd9469}
 @media(max-width:650px){.stage-tools{gap:4px}.tool-button{padding:0 7px}.tool-button span{font-size:9px}}
 @media(max-width:420px){.tool-button span{display:none}}
+.light-list-heading{display:flex;justify-content:space-between;margin:0 0 8px;color:#a6a7ad;font-size:10px;font-weight:700}
+.light-list-heading span:last-child{color:#777981;font-weight:500}
+.light-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.light-item{display:flex;align-items:center;gap:7px;min-width:0;height:32px;padding:0 9px;border:1px solid #393a41;border-radius:5px;background:#25262b;color:#adb0b6;font-size:10px;text-align:left}
+.light-item.active{border-color:#c49a6a;background:#3b3029;color:#f0d6b6}
+.light-item:hover{border-color:#bd9469}
+.light-item-dot{width:9px;height:9px;flex:none;border-radius:50%;background:#e5b77b;box-shadow:0 0 8px #e3ad72aa}
+.light-item small{margin-left:auto;color:#92939b;font-size:9px}
+.light-actions{display:flex;gap:6px;margin:8px 0 18px}
+.light-actions button{height:28px;padding:0 9px;border:1px solid #3d3e45;border-radius:5px;background:#292a30;color:#c5c6ca;font-size:9px}
+.light-actions button:first-child{flex:1;color:#e6bc8d}
+.light-actions button:hover:not(:disabled){border-color:#bd9469}
+.light-actions button:disabled{opacity:.4;cursor:default}
+.light-depth-note{margin:8px 0 0;color:#777981;font-size:9px;line-height:1.5}
+.other-mini-dots,.other-light-handles{position:absolute;inset:0;pointer-events:none}
+.other-mini-dot{position:absolute;width:10px;height:10px;transform:translate(-50%,-50%);border:1px solid #fff8;border-radius:50%;background:#d2a06a;box-shadow:0 0 9px #e9ad6a80}
+#lightHandle{z-index:3}
+.other-light-handles{z-index:2}
+.light-handle.secondary{width:28px;height:28px;border-color:#ffe1adad;background:#b98b5440;box-shadow:0 0 0 4px #ffefc314,0 0 13px #e9ad6a80;color:#fff;font-size:11px;font-weight:700}
+.light-handle.secondary:before,.light-handle.secondary:after{display:none}
+@media(max-width:650px){.light-handle.secondary{width:23px;height:23px;font-size:9px}}
