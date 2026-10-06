@@ -105,8 +105,33 @@
             </div>
           </section>
 
+          <section class="panel-section" aria-labelledby="materialTitle">
+            <div class="section-title"><span class="section-number">04</span><h2 id="materialTitle">材質</h2><span class="info-icon" title="画像全体の反射の強さと広がりを調整します">i</span></div>
+            <div class="control" data-control="gloss">
+              <div class="control-header"><label for="gloss">光沢</label><output id="glossValue">18%</output></div>
+              <input id="gloss" type="range" min="0" max="100" value="18" />
+              <div class="range-ends"><span>控えめ</span><span>強い反射</span></div>
+            </div>
+            <div class="control" data-control="roughness">
+              <div class="control-header"><label for="roughness">表面の粗さ</label><output id="roughnessValue">70%</output></div>
+              <input id="roughness" type="range" min="0" max="100" value="70" />
+              <div class="range-ends"><span>鋭い光</span><span>広くやわらかい光</span></div>
+            </div>
+            <div class="control" data-control="metallic">
+              <div class="control-header"><label for="metallic">金属感</label><output id="metallicValue">0%</output></div>
+              <input id="metallic" type="range" min="0" max="100" value="0" />
+              <div class="range-ends"><span>非金属</span><span>色づいた反射</span></div>
+            </div>
+            <div class="look-preset-row" aria-label="材質プリセット">
+              <button type="button" class="look-preset active" data-material-preset="matte">マット</button>
+              <button type="button" class="look-preset" data-material-preset="satin">サテン</button>
+              <button type="button" class="look-preset" data-material-preset="metal">金属</button>
+            </div>
+            <p class="depth-note">材質の調整は画像全体に適用されます。</p>
+          </section>
+
           <section class="panel-section" aria-labelledby="distanceTitle">
-            <div class="section-title"><span class="section-number">04</span><h2 id="distanceTitle">深度</h2><span class="info-icon" title="白い部分を手前、黒い部分を奥として光と陰影に反映します">i</span></div>
+            <div class="section-title"><span class="section-number">05</span><h2 id="distanceTitle">深度</h2><span class="info-icon" title="白い部分を手前、黒い部分を奥として光と陰影に反映します">i</span></div>
             <div class="control" data-control="depthStrength">
               <div class="control-header"><label for="depthStrength">奥行きの強さ</label><output id="depthStrengthValue">45%</output></div>
               <input id="depthStrength" type="range" min="0" max="100" value="45" />
@@ -131,7 +156,7 @@
           </section>
 
           <section class="panel-section" aria-labelledby="castTitle">
-            <div class="section-title"><span class="section-number">05</span><h2 id="castTitle">落ち影</h2><span class="info-icon" title="深度から、光源に応じて影を投影します">i</span></div>
+            <div class="section-title"><span class="section-number">06</span><h2 id="castTitle">落ち影</h2><span class="info-icon" title="深度から、光源に応じて影を投影します">i</span></div>
             <div class="control" data-control="castStrength">
               <div class="control-header"><label for="castStrength">演出の強さ</label><output id="castStrengthValue">0%</output></div>
               <input id="castStrength" type="range" min="0" max="100" value="0" />
@@ -190,6 +215,6 @@
       <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden />
       <div id="toast" class="toast" role="status" aria-live="polite"></div>
     </div>
-    <script src="./app.js?v=round-normals-1" defer></script>
+    <script src="./app.js?v=material-1" defer></script>
   </body>
 </html>

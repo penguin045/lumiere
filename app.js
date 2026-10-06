@@ -4,15 +4,16 @@
   const MAX_LIGHTS = 4;
   const lightKeys = ['x', 'y', 'intensity', 'spread', 'lightHeight', 'temperature', 'backlight'];
   const lightDefaults = { x: 0.68, y: 0.31, intensity: 80, spread: 65, lightHeight: 55, temperature: 5500, backlight: false };
-  const defaults = { ...lightDefaults, relief: 35, normalStrength: 100, shadow: 40, contactStrength: 35, depthStrength: 45, castStrength: 0, castSoftness: 70 };
+  const defaults = { ...lightDefaults, relief: 35, normalStrength: 100, shadow: 40, contactStrength: 35, gloss: 18, roughness: 70, metallic: 0, depthStrength: 45, castStrength: 0, castSoftness: 70 };
   const state = { ...defaults, lights: [{ ...lightDefaults }], selectedLightIndex: 0, compare: false, before: false, depthPreview: false, normalPreview: false, split: 0.5, image: null, imageName: 'サンプルイラスト', depthEditing: false, depthBusy: false, hasEstimatedDepth: false, brushMode: 'near', brushSize: 10 };
   const $ = (id) => document.getElementById(id);
   const canvas = $('canvas');
   const artboard = $('artboard');
   const stage = $('dropZone');
   const fileInput = $('fileInput');
-  const sliderIds = ['intensity', 'spread', 'lightHeight', 'temperature', 'relief', 'normalStrength', 'shadow', 'contactStrength', 'depthStrength', 'castStrength', 'castSoftness', 'brushSize'];
+  const sliderIds = ['intensity', 'spread', 'lightHeight', 'temperature', 'relief', 'normalStrength', 'shadow', 'contactStrength', 'gloss', 'roughness', 'metallic', 'depthStrength', 'castStrength', 'castSoftness', 'brushSize'];
   const castPresets = { natural: { castStrength: 0, castSoftness: 70 }, soft: { castStrength: 38, castSoftness: 78 }, dramatic: { castStrength: 90, castSoftness: 20 } };
+  const materialPresets = { matte: { gloss: 18, roughness: 70, metallic: 0 }, satin: { gloss: 55, roughness: 45, metallic: 0 }, metal: { gloss: 85, roughness: 22, metallic: 90 } };
   const depthCanvas = document.createElement('canvas');
   const depthContext = depthCanvas.getContext('2d');
   const estimatedDepthCanvas = document.createElement('canvas');
@@ -50,6 +51,9 @@
     uniform float uNormalStrength;
     uniform float uShadow;
     uniform float uContactStrength;
+    uniform float uGloss;
+    uniform float uRoughness;
+    uniform float uMetallic;
     uniform float uDepthStrength;
     uniform float uCastStrength;
     uniform float uCastSoftness;
@@ -200,8 +204,13 @@
           float diffuse = max(dot(normal, lightDirection), 0.0);
           float illumination = light.w * falloff * (0.30 + diffuse * 0.28) * (1.0 + depthBias * 0.9);
           float reliefShade = (diffuse - 0.72) * uRelief * 0.78 * (0.3 + uShadow * 0.7) * falloff * light.w;
-          vec3 contribution = source.rgb * (illumination + reliefShade) * lightTint;
-          contribution += vec3(1.0) * pow(diffuse, 7.0) * falloff * uRelief * light.w * 0.07 * lightTint;
+          vec3 contribution = source.rgb * (illumination + reliefShade) * lightTint * (1.0 - uMetallic * 0.42);
+          vec3 halfVector = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
+          float shininess = mix(110.0, 3.0, uRoughness * uRoughness);
+          float highlight = pow(max(dot(normal, halfVector), 0.0), shininess) * diffuse;
+          float reflection = uGloss * mix(0.42, 0.09, uRoughness) * mix(1.0, 2.0, uMetallic);
+          vec3 reflectionColor = mix(vec3(1.0), vec3(0.18) + source.rgb * 0.82, uMetallic);
+          contribution += reflectionColor * lightTint * highlight * reflection * falloff * light.w;
           frontIntensity += light.w;
           if (uCastStrength > 0.001) {
             float occlusion = castShadowAt(vUv, depth, light.xy, light.z);
@@ -268,7 +277,7 @@
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 255, 255]));
     gl.activeTexture(gl.TEXTURE0);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    uniforms = Object.fromEntries(['uImage', 'uDepthMap', 'uNormalMap', 'uTexel', 'uLightCount', 'uRelief', 'uNormalStrength', 'uShadow', 'uContactStrength', 'uDepthStrength', 'uCastStrength', 'uCastSoftness', 'uShowDepth', 'uShowNormal', 'uAspect', 'uCompare', 'uBefore', 'uSplit'].map(name => [name, gl.getUniformLocation(program, name)]));
+    uniforms = Object.fromEntries(['uImage', 'uDepthMap', 'uNormalMap', 'uTexel', 'uLightCount', 'uRelief', 'uNormalStrength', 'uShadow', 'uContactStrength', 'uGloss', 'uRoughness', 'uMetallic', 'uDepthStrength', 'uCastStrength', 'uCastSoftness', 'uShowDepth', 'uShowNormal', 'uAspect', 'uCompare', 'uBefore', 'uSplit'].map(name => [name, gl.getUniformLocation(program, name)]));
     uniforms.uLightGeometry = gl.getUniformLocation(program, 'uLightGeometry[0]');
     uniforms.uLightAppearance = gl.getUniformLocation(program, 'uLightAppearance[0]');
     gl.uniform1i(uniforms.uImage, 0);
@@ -589,6 +598,10 @@
       const preset = castPresets[button.dataset.castPreset];
       button.classList.toggle('active', state.castStrength === preset.castStrength && state.castSoftness === preset.castSoftness);
     });
+    document.querySelectorAll('[data-material-preset]').forEach(button => {
+      const preset = materialPresets[button.dataset.materialPreset];
+      button.classList.toggle('active', state.gloss === preset.gloss && state.roughness === preset.roughness && state.metallic === preset.metallic);
+    });
     updateLightUI();
     $('miniMapDot').style.left = `${state.x * 100}%`;
     $('miniMapDot').style.top = `${state.y * 100}%`;
@@ -653,6 +666,9 @@
     gl.uniform1f(uniforms.uNormalStrength, state.normalStrength / 100);
     gl.uniform1f(uniforms.uShadow, state.shadow / 100);
     gl.uniform1f(uniforms.uContactStrength, state.contactStrength / 100);
+    gl.uniform1f(uniforms.uGloss, state.gloss / 100);
+    gl.uniform1f(uniforms.uRoughness, state.roughness / 100);
+    gl.uniform1f(uniforms.uMetallic, state.metallic / 100);
     gl.uniform1f(uniforms.uDepthStrength, state.depthStrength / 100);
     gl.uniform1f(uniforms.uCastStrength, state.castStrength / 100);
     gl.uniform1f(uniforms.uCastSoftness, state.castSoftness / 100);
@@ -837,6 +853,11 @@
   });
   document.querySelectorAll('[data-cast-preset]').forEach(button => button.addEventListener('click', () => {
     Object.assign(state, castPresets[button.dataset.castPreset]);
+    updateControlUI();
+    render();
+  }));
+  document.querySelectorAll('[data-material-preset]').forEach(button => button.addEventListener('click', () => {
+    Object.assign(state, materialPresets[button.dataset.materialPreset]);
     updateControlUI();
     render();
   }));
