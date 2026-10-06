@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111216" />
+    <title>Lumière — イラスト光源エディター</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand" aria-label="Lumière">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <div><strong>Lumière</strong><small>ILLUSTRATION LIGHT LAB</small></div>
+        </div>
+        <div class="topbar-actions">
+          <span class="project-name" id="projectName">サンプルイラスト</span>
+          <button class="button button-ghost" id="openButton" type="button"><span class="button-icon">↥</span> 画像を開く</button>
+          <button class="button button-primary" id="exportButton" type="button"><span class="button-icon">↓</span> PNGを書き出す</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-heading">
+            <div class="eyebrow">LIGHT CONTROL</div>
+            <h1>光を、描きなおす。</h1>
+            <p>光源を動かして、イラストの空気感を調整。</p>
+          </div>
+
+          <section class="panel-section source-section" aria-labelledby="sourceTitle">
+            <div class="section-title"><span class="section-number">01</span><h2 id="sourceTitle">光源</h2><span class="section-hint">キャンバス上でドラッグ</span></div>
+            <div class="light-mini-map" id="miniMap" role="slider" tabindex="0" aria-label="光源の位置" aria-valuemin="0" aria-valuemax="100" aria-valuenow="68">
+              <div class="mini-map-glow"></div><div class="mini-map-crosshair horizontal"></div><div class="mini-map-crosshair vertical"></div><div class="mini-map-dot" id="miniMapDot"></div>
+              <span class="map-label map-label-tl">左上</span><span class="map-label map-label-br">右下</span>
+            </div>
+            <div class="control" data-control="intensity">
+              <div class="control-header"><label for="intensity">光の強さ</label><output id="intensityValue">80%</output></div>
+              <input id="intensity" type="range" min="0" max="200" value="80" />
+              <div class="range-ends"><span>やわらかい</span><span>鮮やか</span></div>
+            </div>
+            <div class="control" data-control="spread">
+              <div class="control-header"><label for="spread">光の広がり</label><output id="spreadValue">65%</output></div>
+              <input id="spread" type="range" min="10" max="100" value="65" />
+              <div class="range-ends"><span>スポット</span><span>広範囲</span></div>
+            </div>
+            <div class="control" data-control="lightHeight">
+              <div class="control-header"><label for="lightHeight">光の高さ</label><output id="lightHeightValue">55%</output></div>
+              <input id="lightHeight" type="range" min="0" max="100" value="55" />
+              <div class="range-ends"><span>低い</span><span>高い</span></div>
+            </div>
+          </section>
+
+          <section class="panel-section" aria-labelledby="toneTitle">
+            <div class="section-title"><span class="section-number">02</span><h2 id="toneTitle">光の色</h2></div>
+            <div class="control temperature-control" data-control="temperature">
+              <div class="control-header"><label for="temperature">色温度</label><output id="temperatureValue">5,500 K</output></div>
+              <input id="temperature" type="range" min="2500" max="9000" step="100" value="5500" />
+              <div class="range-ends"><span>暖かい光</span><span>冷たい光</span></div>
+            </div>
+            <div class="temperature-preset-row" aria-label="色温度プリセット">
+              <button type="button" class="preset" data-temperature="3200"><span class="preset-dot sunset"></span>夕暮れ</button>
+              <button type="button" class="preset active" data-temperature="5500"><span class="preset-dot daylight"></span>自然光</button>
+              <button type="button" class="preset" data-temperature="8000"><span class="preset-dot moonlight"></span>月明かり</button>
+            </div>
+          </section>
+
+          <section class="panel-section" aria-labelledby="depthTitle">
+            <div class="section-title"><span class="section-number">03</span><h2 id="depthTitle">立体感</h2><span class="info-icon" title="画像の明暗と推定深度から面の向きを求め、陰影をつけます">i</span></div>
+            <div class="control" data-control="relief">
+              <div class="control-header"><label for="relief">凹凸の深さ</label><output id="reliefValue">35%</output></div>
+              <input id="relief" type="range" min="0" max="100" value="35" />
+              <div class="range-ends"><span>フラット</span><span>くっきり</span></div>
+            </div>
+            <div class="control" data-control="normalStrength">
+              <div class="control-header"><label for="normalStrength">法線の強さ</label><output id="normalStrengthValue">100%</output></div>
+              <input id="normalStrength" type="range" min="0" max="200" value="100" />
+              <div class="range-ends"><span>なし</span><span>強調</span></div>
+            </div>
+            <div class="control" data-control="shadow">
+              <div class="control-header"><label for="shadow">影の濃さ</label><output id="shadowValue">40%</output></div>
+              <input id="shadow" type="range" min="0" max="100" value="40" />
+              <div class="range-ends"><span>淡い</span><span>深い</span></div>
+            </div>
+          </section>
+
+          <section class="panel-section" aria-labelledby="distanceTitle">
+            <div class="section-title"><span class="section-number">04</span><h2 id="distanceTitle">深度</h2><span class="info-icon" title="白い部分を手前、黒い部分を奥として光と陰影に反映します">i</span></div>
+            <div class="control" data-control="depthStrength">
+              <div class="control-header"><label for="depthStrength">奥行きの強さ</label><output id="depthStrengthValue">45%</output></div>
+              <input id="depthStrength" type="range" min="0" max="100" value="45" />
+              <div class="range-ends"><span>自然</span><span>強調</span></div>
+            </div>
+            <div class="depth-status" id="depthStatus" role="status" aria-live="polite">画像から深度を推定します</div>
+            <button class="depth-edit-button" id="depthEditButton" type="button" aria-pressed="false">◉ <span>深度マップを描く</span></button>
+            <p class="depth-note">画像の内容から自動推定し、ブラシで修正できます。</p>
+            <button class="depth-reestimate-button" id="depthReestimateButton" type="button">画像から再推定</button>
+            <div class="depth-tools" id="depthTools" hidden>
+              <p>白＝手前、黒＝奥。画像上をなぞって指定します。</p>
+              <div class="depth-brush-modes" role="group" aria-label="深度ブラシ">
+                <button class="depth-mode active" id="nearButton" type="button" aria-pressed="true"><span class="depth-swatch near"></span>手前にする</button>
+                <button class="depth-mode" id="farButton" type="button" aria-pressed="false"><span class="depth-swatch far"></span>奥にする</button>
+              </div>
+              <div class="control" data-control="brushSize">
+                <div class="control-header"><label for="brushSize">ブラシサイズ</label><output id="brushSizeValue">10%</output></div>
+                <input id="brushSize" type="range" min="2" max="25" value="10" />
+              </div>
+              <button class="depth-reset-button" id="depthResetButton" type="button">推定結果に戻す</button>
+            </div>
+          </section>
+
+          <section class="panel-section" aria-labelledby="castTitle">
+            <div class="section-title"><span class="section-number">05</span><h2 id="castTitle">落ち影</h2><span class="info-icon" title="深度から、光源に応じて影を投影します">i</span></div>
+            <div class="control" data-control="castStrength">
+              <div class="control-header"><label for="castStrength">演出の強さ</label><output id="castStrengthValue">0%</output></div>
+              <input id="castStrength" type="range" min="0" max="100" value="0" />
+              <div class="range-ends"><span>従来の仕上がり</span><span>ドラマチック</span></div>
+            </div>
+            <div class="control" data-control="castSoftness">
+              <div class="control-header"><label for="castSoftness">影の柔らかさ</label><output id="castSoftnessValue">70%</output></div>
+              <input id="castSoftness" type="range" min="0" max="100" value="70" />
+              <div class="range-ends"><span>くっきり</span><span>やわらかい</span></div>
+            </div>
+            <div class="look-preset-row" aria-label="落ち影のプリセット">
+              <button type="button" class="look-preset active" data-cast-preset="natural">自然</button>
+              <button type="button" class="look-preset" data-cast-preset="soft">ソフト</button>
+              <button type="button" class="look-preset" data-cast-preset="dramatic">ドラマ</button>
+            </div>
+            <p class="depth-note">深度推定が終わると落ち影が反映されます。</p>
+          </section>
+
+          <div class="sidebar-footer">
+            <button class="reset-button" id="resetButton" type="button">↺ <span>調整をリセット</span></button>
+            <p>画像は端末内で処理されます。</p>
+          </div>
+        </aside>
+
+        <section class="stage" id="dropZone" aria-label="イラスト編集エリア">
+          <div class="stage-topline">
+            <div class="stage-title"><span class="status-dot"></span><span id="canvasTitle">サンプルイラスト</span><span class="stage-subtitle" id="imageSize">—</span></div>
+            <div class="stage-tools">
+              <button class="tool-button" id="depthViewButton" type="button" aria-pressed="false" title="深度マップを見る">◉ <span>深度</span></button>
+              <button class="tool-button" id="normalViewButton" type="button" aria-pressed="false" title="法線マップを見る">◈ <span>法線</span></button>
+              <button class="tool-button" id="compareButton" type="button" aria-pressed="false" title="調整前後を比較">◐ <span>比較</span></button>
+              <button class="tool-button" id="beforeButton" type="button" aria-pressed="false" title="押している間は元画像">◧ <span>元画像</span></button>
+            </div>
+          </div>
+
+          <div class="stage-center">
+            <div class="stage-orbit orbit-one"></div><div class="stage-orbit orbit-two"></div>
+            <div class="artboard" id="artboard">
+              <canvas id="canvas" aria-label="編集したイラスト"></canvas>
+              <div class="light-handle" id="lightHandle" aria-hidden="true"><span class="light-handle-inner">✦</span></div>
+              <div class="depth-brush-cursor" id="depthBrushCursor" aria-hidden="true" hidden></div>
+              <div class="split-line" id="splitLine" hidden><span class="split-handle">◀ ▶</span></div>
+              <div class="artboard-caption before-caption" id="beforeCaption" hidden>BEFORE</div>
+              <div class="artboard-caption after-caption" id="afterCaption" hidden>AFTER</div>
+            </div>
+          </div>
+
+          <div class="stage-bottomline">
+            <div class="stage-tip"><span class="tip-icon">✦</span><span id="stageTip">イラスト上をクリック・ドラッグして光源を移動</span></div>
+            <div class="stage-zoom" id="zoomLabel">100%</div>
+          </div>
+          <div class="drop-overlay" id="dropOverlay"><span>画像をドロップして開く</span></div>
+        </section>
+      </main>
+      <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden />
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </div>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
