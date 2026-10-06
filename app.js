@@ -396,14 +396,29 @@
     }
     if (!generatedWithWasm) {
       const depthAt = (x, y) => depthPixels[(Math.max(0, Math.min(height - 1, y)) * width + Math.max(0, Math.min(width - 1, x))) * 4] / 255;
+      const boundedDepthAt = (x, y, center) => {
+        const sample = depthAt(x, y);
+        const difference = sample - center;
+        const transition = Math.max(0, Math.min(1, (Math.abs(difference) - 0.12) / 0.20));
+        return center + difference * (1 - transition * transition * (3 - 2 * transition));
+      };
+      const axisSlope = (x, y, radius, center) => {
+        const cross = Math.max(1, Math.floor(radius / 4));
+        const left = (boundedDepthAt(x - radius, y - cross, center) + boundedDepthAt(x - radius, y, center) + boundedDepthAt(x - radius, y + cross, center)) / 3;
+        const right = (boundedDepthAt(x + radius, y - cross, center) + boundedDepthAt(x + radius, y, center) + boundedDepthAt(x + radius, y + cross, center)) / 3;
+        const below = (boundedDepthAt(x - cross, y + radius, center) + boundedDepthAt(x, y + radius, center) + boundedDepthAt(x + cross, y + radius, center)) / 3;
+        const above = (boundedDepthAt(x - cross, y - radius, center) + boundedDepthAt(x, y - radius, center) + boundedDepthAt(x + cross, y - radius, center)) / 3;
+        return [left - right, below - above];
+      };
+      const size = Math.min(width, height);
+      const roundRadius = Math.max(8, Math.floor(size * 5 / 100));
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const left = (depthAt(x - 4, y - 2) + depthAt(x - 4, y) + depthAt(x - 4, y + 2)) / 3;
-          const right = (depthAt(x + 4, y - 2) + depthAt(x + 4, y) + depthAt(x + 4, y + 2)) / 3;
-          const below = (depthAt(x - 2, y + 4) + depthAt(x, y + 4) + depthAt(x + 2, y + 4)) / 3;
-          const above = (depthAt(x - 2, y - 4) + depthAt(x, y - 4) + depthAt(x + 2, y - 4)) / 3;
-          const nx = (left - right) * 2.5;
-          const ny = (below - above) * 2.5;
+          const center = depthAt(x, y);
+          const fine = axisSlope(x, y, 4, center);
+          const round = axisSlope(x, y, roundRadius, center);
+          const nx = fine[0] * 0.75 + round[0] * 5.6 * center;
+          const ny = fine[1] * 0.75 + round[1] * 5.6 * center;
           const length = Math.hypot(nx, ny, 1);
           const index = (y * width + x) * 4;
           pixels[index] = Math.round((nx / length * 0.5 + 0.5) * 255);

@@ -32,6 +32,33 @@ fn depth_at(width: usize, height: usize, x: isize, y: isize) -> f32 {
 }
 
 #[inline]
+fn bounded_depth_at(width: usize, height: usize, x: isize, y: isize, center: f32) -> f32 {
+    let sample = depth_at(width, height, x, y);
+    let difference = sample - center;
+    let transition = ((difference.abs() - 0.12) / 0.20).clamp(0.0, 1.0);
+    let weight = 1.0 - transition * transition * (3.0 - 2.0 * transition);
+    center + difference * weight
+}
+
+#[inline]
+fn axis_slope(width: usize, height: usize, x: isize, y: isize, radius: isize, center: f32) -> (f32, f32) {
+    let cross = (radius / 4).max(1);
+    let left = (bounded_depth_at(width, height, x - radius, y - cross, center)
+        + bounded_depth_at(width, height, x - radius, y, center)
+        + bounded_depth_at(width, height, x - radius, y + cross, center)) / 3.0;
+    let right = (bounded_depth_at(width, height, x + radius, y - cross, center)
+        + bounded_depth_at(width, height, x + radius, y, center)
+        + bounded_depth_at(width, height, x + radius, y + cross, center)) / 3.0;
+    let below = (bounded_depth_at(width, height, x - cross, y + radius, center)
+        + bounded_depth_at(width, height, x, y + radius, center)
+        + bounded_depth_at(width, height, x + cross, y + radius, center)) / 3.0;
+    let above = (bounded_depth_at(width, height, x - cross, y - radius, center)
+        + bounded_depth_at(width, height, x, y - radius, center)
+        + bounded_depth_at(width, height, x + cross, y - radius, center)) / 3.0;
+    (left - right, below - above)
+}
+
+#[inline]
 fn square_root(value: f32) -> f32 {
     let mut estimate = 1.0 + value * 0.25;
     for _ in 0..6 {
@@ -49,24 +76,17 @@ pub extern "C" fn generate_normals(width: u32, height: u32) -> u32 {
     }
 
     let output = core::ptr::addr_of_mut!(OUTPUT).cast::<u8>();
+    let size = width.min(height);
+    let round_radius = (size * 5 / 100).max(8) as isize;
     for y in 0..height {
         for x in 0..width {
             let x = x as isize;
             let y = y as isize;
-            let left = (depth_at(width, height, x - 4, y - 2)
-                + depth_at(width, height, x - 4, y)
-                + depth_at(width, height, x - 4, y + 2)) / 3.0;
-            let right = (depth_at(width, height, x + 4, y - 2)
-                + depth_at(width, height, x + 4, y)
-                + depth_at(width, height, x + 4, y + 2)) / 3.0;
-            let below = (depth_at(width, height, x - 2, y + 4)
-                + depth_at(width, height, x, y + 4)
-                + depth_at(width, height, x + 2, y + 4)) / 3.0;
-            let above = (depth_at(width, height, x - 2, y - 4)
-                + depth_at(width, height, x, y - 4)
-                + depth_at(width, height, x + 2, y - 4)) / 3.0;
-            let nx = (left - right) * 2.5;
-            let ny = (below - above) * 2.5;
+            let center = depth_at(width, height, x, y);
+            let fine = axis_slope(width, height, x, y, 4, center);
+            let round = axis_slope(width, height, x, y, round_radius, center);
+            let nx = fine.0 * 0.75 + round.0 * 5.6 * center;
+            let ny = fine.1 * 0.75 + round.1 * 5.6 * center;
             let length = square_root(nx * nx + ny * ny + 1.0);
             let offset = (y as usize * width + x as usize) * 4;
             unsafe {
