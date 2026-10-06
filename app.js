@@ -447,7 +447,7 @@
 
   async function loadNormalWasm() {
     try {
-      const response = await fetch('./normal-map.wasm');
+      const response = await fetch('./normal-map.wasm?v=round-normals-1');
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const { instance } = await WebAssembly.instantiate(await response.arrayBuffer());
       normalWasm = instance.exports;
