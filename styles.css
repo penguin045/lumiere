@@ -61,3 +61,14 @@
 .light-handle.secondary{width:28px;height:28px;border-color:#ffe1adad;background:#b98b5440;box-shadow:0 0 0 4px #ffefc314,0 0 13px #e9ad6a80;color:#fff;font-size:11px;font-weight:700}
 .light-handle.secondary:before,.light-handle.secondary:after{display:none}
 @media(max-width:650px){.light-handle.secondary{width:23px;height:23px;font-size:9px}}
+.light-direction{margin:0 0 17px;display:flex;align-items:center;justify-content:space-between;gap:10px;color:#c8c9cd;font-size:11px;font-weight:600}
+.light-direction-buttons{display:flex;gap:5px;flex:0 0 62%}
+.light-direction-buttons button{flex:1;height:30px;border:1px solid #393a41;border-radius:5px;background:#25262b;color:#a6a7ad;font-size:10px}
+.light-direction-buttons button:hover{border-color:#bd9469}
+.light-direction-buttons button.active{border-color:#c49a6a;background:#3b3029;color:#f0d6b6}
+.light-direction-buttons #backLightButton.active{border-color:#a3afd5;background:#2c3141;color:#d5ddf6}
+.mini-map-dot.backlight{border-color:#c8d5ff;background:#a3b5e12b;box-shadow:0 0 0 5px #a9bbec16,0 0 23px #a9bbec}
+.mini-map-dot.backlight:after{background:#e1e9ff}
+.other-mini-dot.backlight{background:#aabbe9;box-shadow:0 0 9px #a9bbec80}
+.light-handle.backlight{border-color:#c5d6ff;box-shadow:0 0 0 10px #b9cfff24,0 0 28px #a9c4ffac}
+.light-handle.secondary.backlight{border-color:#c5d6ffad;background:#8a9fc440;box-shadow:0 0 0 4px #c5d6ff14,0 0 13px #a9bbec80}

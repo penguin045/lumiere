@@ -42,6 +42,13 @@
               <button type="button" id="addLightButton">＋ 光源を追加</button>
               <button type="button" id="removeLightButton">削除</button>
             </div>
+            <div class="light-direction" role="group" aria-label="照射方向">
+              <span>照射方向</span>
+              <div class="light-direction-buttons">
+                <button type="button" id="frontLightButton" aria-pressed="true">前から</button>
+                <button type="button" id="backLightButton" aria-pressed="false">逆光</button>
+              </div>
+            </div>
             <div class="control" data-control="intensity">
               <div class="control-header"><label for="intensity">光の強さ</label><output id="intensityValue">80%</output></div>
               <input id="intensity" type="range" min="0" max="200" value="80" />
@@ -55,8 +62,8 @@
             <div class="control" data-control="lightHeight">
               <div class="control-header"><label for="lightHeight">光源の奥行き</label><output id="lightHeightValue">55%</output></div>
               <input id="lightHeight" type="range" min="0" max="100" value="55" />
-              <div class="range-ends"><span>画像面に近い</span><span>手前に離す</span></div>
-              <p class="light-depth-note">画像面に近いほど落ち影が長くなります。</p>
+              <div class="range-ends"><span>画像面に近い</span><span id="lightDepthFarLabel">手前に離す</span></div>
+              <p class="light-depth-note" id="lightDepthNote">画像面に近いほど落ち影が長くなります。</p>
             </div>
           </section>
 

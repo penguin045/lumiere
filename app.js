@@ -2,8 +2,8 @@
   'use strict';
 
   const MAX_LIGHTS = 4;
-  const lightKeys = ['x', 'y', 'intensity', 'spread', 'lightHeight', 'temperature'];
-  const lightDefaults = { x: 0.68, y: 0.31, intensity: 80, spread: 65, lightHeight: 55, temperature: 5500 };
+  const lightKeys = ['x', 'y', 'intensity', 'spread', 'lightHeight', 'temperature', 'backlight'];
+  const lightDefaults = { x: 0.68, y: 0.31, intensity: 80, spread: 65, lightHeight: 55, temperature: 5500, backlight: false };
   const defaults = { ...lightDefaults, relief: 35, normalStrength: 100, shadow: 40, depthStrength: 45, castStrength: 0, castSoftness: 70 };
   const state = { ...defaults, lights: [{ ...lightDefaults }], selectedLightIndex: 0, compare: false, before: false, depthPreview: false, normalPreview: false, split: 0.5, image: null, imageName: 'サンプルイラスト', depthEditing: false, depthBusy: false, hasEstimatedDepth: false, brushMode: 'near', brushSize: 10 };
   const $ = (id) => document.getElementById(id);
@@ -44,7 +44,7 @@
     uniform sampler2D uNormalMap;
     uniform vec2 uTexel;
     uniform vec4 uLightGeometry[${MAX_LIGHTS}];
-    uniform vec2 uLightAppearance[${MAX_LIGHTS}];
+    uniform vec3 uLightAppearance[${MAX_LIGHTS}];
     uniform int uLightCount;
     uniform float uRelief;
     uniform float uNormalStrength;
@@ -110,42 +110,70 @@
                                    dy * uRelief * 7.5 + mappedSlope.y * uNormalStrength, 1.0));
       float depthBias = (depth - 0.5) * uDepthStrength;
       float ambient = 1.0 - uShadow * 0.27 + depthBias * 0.38;
-      float warmth = clamp((5500.0 - uLightAppearance[0].y) / 3000.0, 0.0, 1.0);
-      float coolness = clamp((uLightAppearance[0].y - 5500.0) / 3500.0, 0.0, 1.0);
+      float ambientTemperature = uLightAppearance[0].z > 0.5 ? 5500.0 : uLightAppearance[0].y;
+      float warmth = clamp((5500.0 - ambientTemperature) / 3000.0, 0.0, 1.0);
+      float coolness = clamp((ambientTemperature - 5500.0) / 3500.0, 0.0, 1.0);
       vec3 tint = vec3(1.0) + warmth * vec3(0.11, 0.005, -0.19) + coolness * vec3(-0.13, -0.025, 0.17);
       vec3 color = source.rgb * max(0.0, ambient) * tint;
       color = mix(color, vec3(dot(color, vec3(0.299, 0.587, 0.114))), (1.0 - depth) * uDepthStrength * 0.08);
       vec3 directColor = vec3(0.0);
-      float totalIntensity = 0.0;
+      float frontIntensity = 0.0;
+      float rearIntensity = 0.0;
       float blockedIntensity = 0.0;
       for (int i = 0; i < ${MAX_LIGHTS}; i++) {
         if (i >= uLightCount) break;
         vec4 light = uLightGeometry[i];
-        vec2 appearance = uLightAppearance[i];
+        vec3 appearance = uLightAppearance[i];
         vec2 delta = vec2((light.x - vUv.x) * uAspect, light.y - vUv.y);
         float distanceToLight = length(delta);
-        float surfaceDepth = depth * uDepthStrength * 0.18;
-        float heightAboveSurface = max(0.08, mix(0.25, 0.82, light.z) - surfaceDepth);
-        vec3 lightDirection = normalize(vec3(delta * 1.3, heightAboveSurface));
-        float diffuse = max(dot(normal, lightDirection), 0.0);
         float spread = appearance.x * mix(0.78, 1.18, light.z);
         float falloff = exp(-distanceToLight * distanceToLight / max(0.035, spread * spread * 0.52));
-        float illumination = light.w * falloff * (0.30 + diffuse * 0.28) * (1.0 + depthBias * 0.9);
-        float reliefShade = (diffuse - 0.72) * uRelief * 0.78 * (0.3 + uShadow * 0.7) * falloff * light.w;
         float lightWarmth = clamp((5500.0 - appearance.y) / 3000.0, 0.0, 1.0);
         float lightCoolness = clamp((appearance.y - 5500.0) / 3500.0, 0.0, 1.0);
         vec3 lightTint = vec3(1.0) + lightWarmth * vec3(0.12, -0.035, -0.22) + lightCoolness * vec3(-0.20, -0.035, 0.19);
-        vec3 contribution = source.rgb * (illumination + reliefShade) * lightTint;
-        contribution += vec3(1.0) * pow(diffuse, 7.0) * falloff * uRelief * light.w * 0.07 * lightTint;
-        totalIntensity += light.w;
-        if (uCastStrength > 0.001) {
-          float occlusion = castShadowAt(vUv, depth, light.xy, light.z);
-          blockedIntensity += occlusion * light.w;
-          contribution *= 1.0 - occlusion * uCastStrength * (0.64 + uShadow * 0.25);
+        if (appearance.z > 0.5) {
+          vec2 edgeStep = uTexel * mix(4.0, 18.0, light.z);
+          vec2 xStep = vec2(edgeStep.x, 0.0);
+          vec2 yStep = vec2(0.0, edgeStep.y);
+          vec4 leftSample = texture2D(uImage, vUv - xStep);
+          vec4 rightSample = texture2D(uImage, vUv + xStep);
+          vec4 downSample = texture2D(uImage, vUv - yStep);
+          vec4 upSample = texture2D(uImage, vUv + yStep);
+          float leftDepth = texture2D(uDepthMap, vUv - xStep).r;
+          float rightDepth = texture2D(uDepthMap, vUv + xStep).r;
+          float downDepth = texture2D(uDepthMap, vUv - yStep).r;
+          float upDepth = texture2D(uDepthMap, vUv + yStep).r;
+          float depthEdge = max(depth - min(min(leftDepth, rightDepth), min(downDepth, upDepth)), 0.0);
+          float alphaEdge = max(source.a - min(min(leftSample.a, rightSample.a), min(downSample.a, upSample.a)), 0.0);
+          vec2 outward = vec2(leftDepth - rightDepth + leftSample.a - rightSample.a,
+                              downDepth - upDepth + downSample.a - upSample.a);
+          float facing = max(dot(normalize(outward + vec2(0.00001)), normalize(delta + vec2(0.00001))), 0.0);
+          float rim = smoothstep(0.035, 0.24, max(depthEdge * 1.5, alphaEdge)) * facing;
+          vec3 edgeColor = mix(source.rgb, vec3(1.0), 0.68);
+          directColor += edgeColor * lightTint * rim * falloff * light.w * 1.45;
+          rearIntensity += light.w;
+        } else {
+          float surfaceDepth = depth * uDepthStrength * 0.18;
+          float heightAboveSurface = max(0.08, mix(0.25, 0.82, light.z) - surfaceDepth);
+          vec3 lightDirection = normalize(vec3(delta * 1.3, heightAboveSurface));
+          float diffuse = max(dot(normal, lightDirection), 0.0);
+          float illumination = light.w * falloff * (0.30 + diffuse * 0.28) * (1.0 + depthBias * 0.9);
+          float reliefShade = (diffuse - 0.72) * uRelief * 0.78 * (0.3 + uShadow * 0.7) * falloff * light.w;
+          vec3 contribution = source.rgb * (illumination + reliefShade) * lightTint;
+          contribution += vec3(1.0) * pow(diffuse, 7.0) * falloff * uRelief * light.w * 0.07 * lightTint;
+          frontIntensity += light.w;
+          if (uCastStrength > 0.001) {
+            float occlusion = castShadowAt(vUv, depth, light.xy, light.z);
+            blockedIntensity += occlusion * light.w;
+            contribution *= 1.0 - occlusion * uCastStrength * (0.64 + uShadow * 0.25);
+          }
+          directColor += contribution;
         }
-        directColor += contribution;
       }
-      color = color * (1.0 - blockedIntensity / max(totalIntensity, 0.001) * uCastStrength * (0.64 + uShadow * 0.25)) + directColor;
+      float rearShare = rearIntensity / max(frontIntensity + rearIntensity, 0.001);
+      color = color * (1.0 - rearShare * 0.24)
+            * (1.0 - blockedIntensity / max(frontIntensity, 0.001) * uCastStrength * (0.64 + uShadow * 0.25))
+            + directColor;
       gl_FragColor = vec4(clamp(color, 0.0, 1.0), source.a);
     }
   `;
@@ -270,16 +298,18 @@
       const active = index === state.selectedLightIndex;
       button.classList.toggle('active', active);
       button.setAttribute('aria-pressed', String(active));
-      button.querySelector('.light-item-value').textContent = `${light.intensity}%`;
+      button.querySelector('.light-item-value').textContent = `${light.backlight ? '逆光 ' : ''}${light.intensity}%`;
       button.querySelector('.light-item-dot').style.background = light.temperature < 5000 ? '#e7a46f' : light.temperature > 6500 ? '#a8c6ed' : '#e9dfc6';
       if (active) return;
       const miniDot = document.createElement('span');
       miniDot.className = 'other-mini-dot';
+      miniDot.classList.toggle('backlight', light.backlight);
       miniDot.style.left = `${light.x * 100}%`;
       miniDot.style.top = `${light.y * 100}%`;
       miniDots.append(miniDot);
       const handle = document.createElement('span');
       handle.className = 'light-handle secondary';
+      handle.classList.toggle('backlight', light.backlight);
       handle.style.left = `${light.x * 100}%`;
       handle.style.top = `${light.y * 100}%`;
       handle.textContent = String(index + 1);
@@ -492,6 +522,12 @@
       $(id + 'Value').textContent = id === 'temperature' ? `${state[id].toLocaleString('ja-JP')} K` : `${state[id]}%`;
     }
     document.querySelectorAll('[data-temperature]').forEach(button => button.classList.toggle('active', Number(button.dataset.temperature) === state.temperature));
+    for (const [id, active] of [['frontLightButton', !state.backlight], ['backLightButton', state.backlight]]) {
+      $(id).classList.toggle('active', active);
+      $(id).setAttribute('aria-pressed', String(active));
+    }
+    $('lightDepthFarLabel').textContent = state.backlight ? '背後に離す' : '手前に離す';
+    $('lightDepthNote').textContent = state.backlight ? '背後に離すほど輪郭の光が広がります。' : '画像面に近いほど落ち影が長くなります。';
     document.querySelectorAll('[data-cast-preset]').forEach(button => {
       const preset = castPresets[button.dataset.castPreset];
       button.classList.toggle('active', state.castStrength === preset.castStrength && state.castSoftness === preset.castSoftness);
@@ -499,10 +535,12 @@
     updateLightUI();
     $('miniMapDot').style.left = `${state.x * 100}%`;
     $('miniMapDot').style.top = `${state.y * 100}%`;
+    $('miniMapDot').classList.toggle('backlight', state.backlight);
     $('miniMap').setAttribute('aria-valuenow', String(Math.round(state.x * 100)));
     $('miniMap').setAttribute('aria-valuetext', `横 ${Math.round(state.x * 100)}%、縦 ${Math.round(state.y * 100)}%`);
     $('lightHandle').style.left = `${state.x * 100}%`;
     $('lightHandle').style.top = `${state.y * 100}%`;
+    $('lightHandle').classList.toggle('backlight', state.backlight);
     $('lightHandle').style.opacity = state.compare || state.before || state.depthEditing || state.depthPreview || state.normalPreview ? '0' : '1';
     $('splitLine').hidden = !state.compare;
     $('splitLine').style.left = `${state.split * 100}%`;
@@ -546,13 +584,13 @@
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.uniform2f(uniforms.uTexel, 1 / canvas.width, 1 / canvas.height);
     const lightGeometry = new Float32Array(MAX_LIGHTS * 4);
-    const lightAppearance = new Float32Array(MAX_LIGHTS * 2);
+    const lightAppearance = new Float32Array(MAX_LIGHTS * 3);
     state.lights.forEach((light, index) => {
       lightGeometry.set([light.x, 1 - light.y, light.lightHeight / 100, light.intensity / 100], index * 4);
-      lightAppearance.set([light.spread / 100, light.temperature], index * 2);
+      lightAppearance.set([light.spread / 100, light.temperature, Number(light.backlight)], index * 3);
     });
     gl.uniform4fv(uniforms.uLightGeometry, lightGeometry);
-    gl.uniform2fv(uniforms.uLightAppearance, lightAppearance);
+    gl.uniform3fv(uniforms.uLightAppearance, lightAppearance);
     gl.uniform1i(uniforms.uLightCount, state.lights.length);
     gl.uniform1f(uniforms.uRelief, state.relief / 100);
     gl.uniform1f(uniforms.uNormalStrength, state.normalStrength / 100);
@@ -716,6 +754,14 @@
     updateControlUI();
     render();
   }));
+  for (const [id, backlight] of [['frontLightButton', false], ['backLightButton', true]]) {
+    $(id).addEventListener('click', () => {
+      state.backlight = backlight;
+      saveSelectedLight();
+      updateControlUI();
+      render();
+    });
+  }
   $('lightList').addEventListener('click', event => {
     const button = event.target.closest('[data-light-index]');
     if (button) selectLight(Number(button.dataset.lightIndex));
