@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#111216" />
     <title>Lumière — イラスト光源エディター</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=material-map-1" />
   </head>
   <body>
     <div class="app-shell">
@@ -105,8 +105,13 @@
             </div>
           </section>
 
-          <section class="panel-section" aria-labelledby="materialTitle">
-            <div class="section-title"><span class="section-number">04</span><h2 id="materialTitle">材質</h2><span class="info-icon" title="画像全体の反射の強さと広がりを調整します">i</span></div>
+          <section class="panel-section" id="materialSection" aria-labelledby="materialTitle">
+            <div class="section-title"><span class="section-number">04</span><h2 id="materialTitle">材質</h2><span class="info-icon" title="画像から領域ごとの材質感を推定し、光の反射に使います">i</span></div>
+            <button class="material-auto-button active" id="materialAutoButton" type="button" aria-pressed="true">◈ 画像から自動判定</button>
+            <div class="depth-status" id="materialStatus" role="status" aria-live="polite">画像から材質を推定します</div>
+            <button class="depth-reestimate-button" id="materialReestimateButton" type="button">画像から再判定</button>
+            <p class="depth-note">髪・肌・衣服などの領域と見た目から推定。スライダーやプリセットを使うと手動に切り替わります。</p>
+            <p class="material-manual-heading">手動設定</p>
             <div class="control" data-control="gloss">
               <div class="control-header"><label for="gloss">光沢</label><output id="glossValue">18%</output></div>
               <input id="gloss" type="range" min="0" max="100" value="18" />
@@ -127,7 +132,7 @@
               <button type="button" class="look-preset" data-material-preset="satin">サテン</button>
               <button type="button" class="look-preset" data-material-preset="metal">金属</button>
             </div>
-            <p class="depth-note">材質の調整は画像全体に適用されます。</p>
+            <p class="depth-note">手動設定は画像全体に適用されます。</p>
           </section>
 
           <section class="panel-section" aria-labelledby="distanceTitle">
@@ -187,6 +192,7 @@
             <div class="stage-tools">
               <button class="tool-button" id="depthViewButton" type="button" aria-pressed="false" title="深度マップを見る">◉ <span>深度</span></button>
               <button class="tool-button" id="normalViewButton" type="button" aria-pressed="false" title="法線マップを見る">◈ <span>法線</span></button>
+              <button class="tool-button" id="materialViewButton" type="button" aria-pressed="false" title="材質マップを見る">◐ <span>材質</span></button>
               <button class="tool-button" id="compareButton" type="button" aria-pressed="false" title="調整前後を比較">◐ <span>比較</span></button>
               <button class="tool-button" id="beforeButton" type="button" aria-pressed="false" title="押している間は元画像">◧ <span>元画像</span></button>
             </div>
@@ -215,6 +221,6 @@
       <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden />
       <div id="toast" class="toast" role="status" aria-live="polite"></div>
     </div>
-    <script src="./app.js?v=material-1" defer></script>
+    <script src="./app.js?v=material-map-1" defer></script>
   </body>
 </html>

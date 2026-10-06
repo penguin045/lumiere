@@ -4,14 +4,15 @@
   const MAX_LIGHTS = 4;
   const lightKeys = ['x', 'y', 'intensity', 'spread', 'lightHeight', 'temperature', 'backlight'];
   const lightDefaults = { x: 0.68, y: 0.31, intensity: 80, spread: 65, lightHeight: 55, temperature: 5500, backlight: false };
-  const defaults = { ...lightDefaults, relief: 35, normalStrength: 100, shadow: 40, contactStrength: 35, gloss: 18, roughness: 70, metallic: 0, depthStrength: 45, castStrength: 0, castSoftness: 70 };
-  const state = { ...defaults, lights: [{ ...lightDefaults }], selectedLightIndex: 0, compare: false, before: false, depthPreview: false, normalPreview: false, split: 0.5, image: null, imageName: 'サンプルイラスト', depthEditing: false, depthBusy: false, hasEstimatedDepth: false, brushMode: 'near', brushSize: 10 };
+  const defaults = { ...lightDefaults, relief: 35, normalStrength: 100, shadow: 40, contactStrength: 35, gloss: 18, roughness: 70, metallic: 0, materialAuto: true, depthStrength: 45, castStrength: 0, castSoftness: 70 };
+  const state = { ...defaults, lights: [{ ...lightDefaults }], selectedLightIndex: 0, compare: false, before: false, depthPreview: false, normalPreview: false, materialPreview: false, split: 0.5, image: null, imageName: 'サンプルイラスト', depthEditing: false, depthBusy: false, hasEstimatedDepth: false, materialBusy: false, hasEstimatedMaterial: false, brushMode: 'near', brushSize: 10 };
   const $ = (id) => document.getElementById(id);
   const canvas = $('canvas');
   const artboard = $('artboard');
   const stage = $('dropZone');
   const fileInput = $('fileInput');
   const sliderIds = ['intensity', 'spread', 'lightHeight', 'temperature', 'relief', 'normalStrength', 'shadow', 'contactStrength', 'gloss', 'roughness', 'metallic', 'depthStrength', 'castStrength', 'castSoftness', 'brushSize'];
+  const materialControlIds = new Set(['gloss', 'roughness', 'metallic']);
   const castPresets = { natural: { castStrength: 0, castSoftness: 70 }, soft: { castStrength: 38, castSoftness: 78 }, dramatic: { castStrength: 90, castSoftness: 20 } };
   const materialPresets = { matte: { gloss: 18, roughness: 70, metallic: 0 }, satin: { gloss: 55, roughness: 45, metallic: 0 }, metal: { gloss: 85, roughness: 22, metallic: 90 } };
   const depthCanvas = document.createElement('canvas');
@@ -22,11 +23,17 @@
   const normalContext = normalCanvas.getContext('2d');
   const normalDepthCanvas = document.createElement('canvas');
   const normalDepthContext = normalDepthCanvas.getContext('2d');
+  const materialCanvas = document.createElement('canvas');
+  const materialContext = materialCanvas.getContext('2d');
+  const materialInputCanvas = document.createElement('canvas');
+  const materialInputContext = materialInputCanvas.getContext('2d', { willReadFrequently: true });
   let normalUpdateQueued = false;
   let normalWasm = null;
   let estimatorPromise = null;
+  let materialSegmenterPromise = null;
   let inferenceQueue = Promise.resolve();
   let depthGeneration = 0;
+  let materialGeneration = 0;
   let toastTimer;
 
   const vertexSource = `
@@ -43,6 +50,7 @@
     uniform sampler2D uImage;
     uniform sampler2D uDepthMap;
     uniform sampler2D uNormalMap;
+    uniform sampler2D uMaterialMap;
     uniform vec2 uTexel;
     uniform vec4 uLightGeometry[${MAX_LIGHTS}];
     uniform vec3 uLightAppearance[${MAX_LIGHTS}];
@@ -54,11 +62,13 @@
     uniform float uGloss;
     uniform float uRoughness;
     uniform float uMetallic;
+    uniform float uMaterialAuto;
     uniform float uDepthStrength;
     uniform float uCastStrength;
     uniform float uCastSoftness;
     uniform float uShowDepth;
     uniform float uShowNormal;
+    uniform float uShowMaterial;
     uniform float uAspect;
     uniform float uCompare;
     uniform float uBefore;
@@ -133,6 +143,13 @@
         gl_FragColor = vec4(texture2D(uNormalMap, vUv).rgb, source.a);
         return;
       }
+      if (uShowMaterial > 0.5) {
+        vec3 material = mix(vec3(uGloss, uRoughness, uMetallic), texture2D(uMaterialMap, vUv).rgb, uMaterialAuto);
+        vec3 mapColor = mix(vec3(0.42, 0.34, 0.50), vec3(0.44, 0.69, 0.88), smoothstep(0.25, 0.60, material.r));
+        mapColor = mix(mapColor, vec3(0.95, 0.70, 0.32), smoothstep(0.25, 0.75, material.b));
+        gl_FragColor = vec4(mapColor, source.a);
+        return;
+      }
       if (uBefore > 0.5 || (uCompare > 0.5 && vUv.x < uSplit)) {
         gl_FragColor = source;
         return;
@@ -152,6 +169,7 @@
       vec2 mappedSlope = mappedNormal.xy / max(mappedNormal.z, 0.1);
       vec3 normal = normalize(vec3(dx * uRelief * 7.5 + mappedSlope.x * uNormalStrength,
                                    dy * uRelief * 7.5 + mappedSlope.y * uNormalStrength, 1.0));
+      vec3 material = mix(vec3(uGloss, uRoughness, uMetallic), texture2D(uMaterialMap, vUv).rgb, uMaterialAuto);
       float depthBias = (depth - 0.5) * uDepthStrength;
       float ambient = 1.0 - uShadow * 0.27 + depthBias * 0.38;
       float ambientTemperature = uLightAppearance[0].z > 0.5 ? 5500.0 : uLightAppearance[0].y;
@@ -204,12 +222,12 @@
           float diffuse = max(dot(normal, lightDirection), 0.0);
           float illumination = light.w * falloff * (0.30 + diffuse * 0.28) * (1.0 + depthBias * 0.9);
           float reliefShade = (diffuse - 0.72) * uRelief * 0.78 * (0.3 + uShadow * 0.7) * falloff * light.w;
-          vec3 contribution = source.rgb * (illumination + reliefShade) * lightTint * (1.0 - uMetallic * 0.42);
+          vec3 contribution = source.rgb * (illumination + reliefShade) * lightTint * (1.0 - material.b * 0.42);
           vec3 halfVector = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
-          float shininess = mix(110.0, 3.0, uRoughness * uRoughness);
+          float shininess = mix(110.0, 3.0, material.g * material.g);
           float highlight = pow(max(dot(normal, halfVector), 0.0), shininess) * diffuse;
-          float reflection = uGloss * mix(0.42, 0.09, uRoughness) * mix(1.0, 2.0, uMetallic);
-          vec3 reflectionColor = mix(vec3(1.0), vec3(0.18) + source.rgb * 0.82, uMetallic);
+          float reflection = material.r * mix(0.42, 0.09, material.g) * mix(1.0, 2.0, material.b);
+          vec3 reflectionColor = mix(vec3(1.0), vec3(0.18) + source.rgb * 0.82, material.b);
           contribution += reflectionColor * lightTint * highlight * reflection * falloff * light.w;
           frontIntensity += light.w;
           if (uCastStrength > 0.001) {
@@ -237,7 +255,7 @@
     return shader;
   }
 
-  let gl, program, texture, depthTexture, normalTexture, uniforms;
+  let gl, program, texture, depthTexture, normalTexture, materialTexture, uniforms;
   try {
     gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
     if (!gl) throw new Error('WebGLを利用できません');
@@ -275,14 +293,23 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 255, 255]));
+    materialTexture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, materialTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([46, 179, 0, 255]));
     gl.activeTexture(gl.TEXTURE0);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    uniforms = Object.fromEntries(['uImage', 'uDepthMap', 'uNormalMap', 'uTexel', 'uLightCount', 'uRelief', 'uNormalStrength', 'uShadow', 'uContactStrength', 'uGloss', 'uRoughness', 'uMetallic', 'uDepthStrength', 'uCastStrength', 'uCastSoftness', 'uShowDepth', 'uShowNormal', 'uAspect', 'uCompare', 'uBefore', 'uSplit'].map(name => [name, gl.getUniformLocation(program, name)]));
+    uniforms = Object.fromEntries(['uImage', 'uDepthMap', 'uNormalMap', 'uMaterialMap', 'uTexel', 'uLightCount', 'uRelief', 'uNormalStrength', 'uShadow', 'uContactStrength', 'uGloss', 'uRoughness', 'uMetallic', 'uMaterialAuto', 'uDepthStrength', 'uCastStrength', 'uCastSoftness', 'uShowDepth', 'uShowNormal', 'uShowMaterial', 'uAspect', 'uCompare', 'uBefore', 'uSplit'].map(name => [name, gl.getUniformLocation(program, name)]));
     uniforms.uLightGeometry = gl.getUniformLocation(program, 'uLightGeometry[0]');
     uniforms.uLightAppearance = gl.getUniformLocation(program, 'uLightAppearance[0]');
     gl.uniform1i(uniforms.uImage, 0);
     gl.uniform1i(uniforms.uDepthMap, 1);
     gl.uniform1i(uniforms.uNormalMap, 2);
+    gl.uniform1i(uniforms.uMaterialMap, 3);
   } catch (error) {
     console.error(error);
     showToast('このブラウザでは画像処理を開始できません');
@@ -366,7 +393,7 @@
       handle.textContent = String(index + 1);
       otherHandles.append(handle);
     });
-    otherHandles.hidden = state.compare || state.before || state.depthEditing || state.depthPreview || state.normalPreview;
+    otherHandles.hidden = state.compare || state.before || state.depthEditing || state.depthPreview || state.normalPreview || state.materialPreview;
   }
 
   function uploadDepthMap() {
@@ -513,6 +540,151 @@
     return estimatorPromise;
   }
 
+  function setMaterialStatus(message, kind = '') {
+    const status = $('materialStatus');
+    status.textContent = message;
+    status.className = `depth-status ${kind}`;
+  }
+
+  function buildMaterialMap(segments = []) {
+    if (!state.image) return [];
+    const scale = Math.min(1, 512 / Math.max(canvas.width, canvas.height));
+    const width = materialCanvas.width = materialInputCanvas.width = Math.max(1, Math.round(canvas.width * scale));
+    const height = materialCanvas.height = materialInputCanvas.height = Math.max(1, Math.round(canvas.height * scale));
+    materialInputContext.clearRect(0, 0, width, height);
+    materialInputContext.fillStyle = '#ffffff';
+    materialInputContext.fillRect(0, 0, width, height);
+    materialInputContext.drawImage(state.image, 0, 0, width, height);
+    const source = materialInputContext.getImageData(0, 0, width, height).data;
+    const result = materialContext.createImageData(width, height);
+    const luminance = new Float32Array(width * height);
+    for (let index = 0; index < luminance.length; index++) {
+      const offset = index * 4;
+      luminance[index] = (source[offset] * 0.299 + source[offset + 1] * 0.587 + source[offset + 2] * 0.114) / 255;
+    }
+    const sampleLuma = (x, y) => luminance[Math.max(0, Math.min(height - 1, y)) * width + Math.max(0, Math.min(width - 1, x))];
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x;
+        const offset = index * 4;
+        const red = source[offset] / 255;
+        const green = source[offset + 1] / 255;
+        const blue = source[offset + 2] / 255;
+        const saturation = Math.max(red, green, blue) - Math.min(red, green, blue);
+        const nearby = (sampleLuma(x - 6, y) + sampleLuma(x + 6, y) + sampleLuma(x, y - 6) + sampleLuma(x, y + 6)) * 0.25;
+        const brightDetail = Math.max(0, Math.min(1, (luminance[index] - nearby - 0.09) * 3.5));
+        const reflective = brightDetail * (1 - saturation * 0.65) * Math.max(0, Math.min(1, (luminance[index] - 0.48) * 3));
+        const darkSmooth = Math.max(0, Math.min(1, (0.55 - luminance[index]) * 3))
+          * Math.max(0, Math.min(1, (blue - red) * 20));
+        result.data[offset] = Math.round((0.18 + darkSmooth * 0.32 + reflective * 0.50) * 255);
+        result.data[offset + 1] = Math.round((0.70 - darkSmooth * 0.23 - reflective * 0.46) * 255);
+        result.data[offset + 2] = Math.round(reflective * 0.60 * 255);
+        result.data[offset + 3] = 255;
+      }
+    }
+
+    const materials = {
+      Hair: [0.55, 0.43, 0],
+      Face: [0.09, 0.82, 0],
+      'Left-arm': [0.09, 0.82, 0], 'Right-arm': [0.09, 0.82, 0],
+      'Left-leg': [0.09, 0.82, 0], 'Right-leg': [0.09, 0.82, 0],
+      'Upper-clothes': [0.16, 0.78, 0], Skirt: [0.16, 0.78, 0],
+      Pants: [0.16, 0.78, 0], Dress: [0.16, 0.78, 0], Scarf: [0.16, 0.78, 0],
+      Sunglasses: [0.72, 0.22, 0.60],
+      Belt: [0.36, 0.54, 0.12], Bag: [0.32, 0.60, 0.08],
+      'Left-shoe': [0.33, 0.56, 0.05], 'Right-shoe': [0.33, 0.56, 0.05],
+    };
+    const detected = [];
+    for (const segment of segments) {
+      const values = materials[segment.label];
+      const mask = segment.mask;
+      if (!values || !mask?.data || !mask.width || !mask.height) continue;
+      const channels = mask.channels || 1;
+      let painted = 0;
+      for (let y = 0; y < height; y++) {
+        const maskY = Math.min(mask.height - 1, Math.floor(y * mask.height / height));
+        for (let x = 0; x < width; x++) {
+          const maskX = Math.min(mask.width - 1, Math.floor(x * mask.width / width));
+          if (mask.data[(maskY * mask.width + maskX) * channels] < 128) continue;
+          const offset = (y * width + x) * 4;
+          result.data[offset] = Math.round(values[0] * 255);
+          result.data[offset + 1] = Math.round(values[1] * 255);
+          result.data[offset + 2] = Math.round(values[2] * 255);
+          painted++;
+        }
+      }
+      if (painted > width * height * 0.005) detected.push(segment.label);
+    }
+    materialContext.putImageData(result, 0, 0);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, materialTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, materialCanvas);
+    gl.activeTexture(gl.TEXTURE0);
+    state.hasEstimatedMaterial = true;
+    updateControlUI();
+    render();
+    return detected;
+  }
+
+  async function getMaterialSegmenter() {
+    if (!materialSegmenterPromise) {
+      materialSegmenterPromise = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1')
+        .then(async ({ pipeline, env }) => {
+          env.allowLocalModels = false;
+          env.useBrowserCache = true;
+          return pipeline('image-segmentation', 'Xenova/segformer_b0_clothes', {
+            dtype: 'q8',
+            progress_callback: progress => {
+              if (state.materialBusy && progress.status === 'progress' && Number.isFinite(progress.progress)) {
+                setMaterialStatus(`領域モデルを取得中 ${Math.round(progress.progress)}%`, 'loading');
+              }
+            },
+          });
+        })
+        .catch(error => { materialSegmenterPromise = null; throw error; });
+    }
+    return materialSegmenterPromise;
+  }
+
+  function estimateMaterials() {
+    if (!state.image) return;
+    const generation = ++materialGeneration;
+    const image = state.image;
+    state.materialBusy = true;
+    setMaterialStatus('画像の領域を解析中…', 'loading');
+    updateControlUI();
+    inferenceQueue = inferenceQueue.catch(() => {}).then(async () => {
+      try {
+        if (generation !== materialGeneration) return;
+        const segmenter = await getMaterialSegmenter();
+        if (generation !== materialGeneration) return;
+        const input = document.createElement('canvas');
+        const scale = Math.min(1, 512 / Math.max(canvas.width, canvas.height));
+        input.width = Math.max(1, Math.round(canvas.width * scale));
+        input.height = Math.max(1, Math.round(canvas.height * scale));
+        const context = input.getContext('2d');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, input.width, input.height);
+        context.drawImage(image, 0, 0, input.width, input.height);
+        setMaterialStatus('髪・肌・衣服などを判定中…', 'loading');
+        const segments = await segmenter(input);
+        if (generation !== materialGeneration) return;
+        const detected = buildMaterialMap(segments);
+        state.materialBusy = false;
+        const names = { Hair: '髪', Face: '肌', 'Left-arm': '肌', 'Right-arm': '肌', 'Left-leg': '肌', 'Right-leg': '肌', 'Upper-clothes': '衣服', Skirt: '衣服', Pants: '衣服', Dress: '衣服', Scarf: '衣服', Sunglasses: '眼鏡', Belt: '小物', Bag: '小物', 'Left-shoe': '靴', 'Right-shoe': '靴' };
+        const regions = [...new Set(detected.map(label => names[label]).filter(Boolean))];
+        setMaterialStatus(regions.length ? `${regions.join('・')}を検出して材質を推定しました` : '色とハイライトから材質を推定しました', 'ready');
+        updateControlUI();
+      } catch (error) {
+        console.warn('領域モデルを使えないため、画像の見た目から材質を推定します', error);
+        if (generation !== materialGeneration) return;
+        state.materialBusy = false;
+        setMaterialStatus('色とハイライトから材質を推定しました', 'ready');
+        updateControlUI();
+      }
+    });
+  }
+
   function applyEstimatedDepth(rawDepth) {
     if (!rawDepth || !rawDepth.data || !rawDepth.width || !rawDepth.height) throw new Error('深度データがありません');
     if (rawDepth.data.length < rawDepth.width * rawDepth.height * (rawDepth.channels || 1)) throw new Error('深度データが不完全です');
@@ -600,8 +772,12 @@
     });
     document.querySelectorAll('[data-material-preset]').forEach(button => {
       const preset = materialPresets[button.dataset.materialPreset];
-      button.classList.toggle('active', state.gloss === preset.gloss && state.roughness === preset.roughness && state.metallic === preset.metallic);
+      button.classList.toggle('active', !state.materialAuto && state.gloss === preset.gloss && state.roughness === preset.roughness && state.metallic === preset.metallic);
     });
+    $('materialAutoButton').classList.toggle('active', state.materialAuto);
+    $('materialAutoButton').setAttribute('aria-pressed', String(state.materialAuto));
+    $('materialSection').classList.toggle('material-auto-active', state.materialAuto);
+    $('materialReestimateButton').disabled = state.materialBusy || !state.image;
     updateLightUI();
     $('miniMapDot').style.left = `${state.x * 100}%`;
     $('miniMapDot').style.top = `${state.y * 100}%`;
@@ -611,7 +787,7 @@
     $('lightHandle').style.left = `${state.x * 100}%`;
     $('lightHandle').style.top = `${state.y * 100}%`;
     $('lightHandle').classList.toggle('backlight', state.backlight);
-    $('lightHandle').style.opacity = state.compare || state.before || state.depthEditing || state.depthPreview || state.normalPreview ? '0' : '1';
+    $('lightHandle').style.opacity = state.compare || state.before || state.depthEditing || state.depthPreview || state.normalPreview || state.materialPreview ? '0' : '1';
     $('splitLine').hidden = !state.compare;
     $('splitLine').style.left = `${state.split * 100}%`;
     $('beforeCaption').hidden = !state.compare;
@@ -620,14 +796,17 @@
     $('compareButton').setAttribute('aria-pressed', String(state.compare));
     $('beforeButton').classList.toggle('active', state.before);
     $('beforeButton').setAttribute('aria-pressed', String(state.before));
-    $('compareButton').disabled = state.depthEditing || state.depthPreview || state.normalPreview;
-    $('beforeButton').disabled = state.depthEditing || state.depthPreview || state.normalPreview;
+    $('compareButton').disabled = state.depthEditing || state.depthPreview || state.normalPreview || state.materialPreview;
+    $('beforeButton').disabled = state.depthEditing || state.depthPreview || state.normalPreview || state.materialPreview;
     $('depthViewButton').classList.toggle('active', state.depthPreview);
     $('depthViewButton').setAttribute('aria-pressed', String(state.depthPreview));
     $('depthViewButton').disabled = state.depthBusy || !state.hasEstimatedDepth;
     $('normalViewButton').classList.toggle('active', state.normalPreview);
     $('normalViewButton').setAttribute('aria-pressed', String(state.normalPreview));
     $('normalViewButton').disabled = !state.image;
+    $('materialViewButton').classList.toggle('active', state.materialPreview);
+    $('materialViewButton').setAttribute('aria-pressed', String(state.materialPreview));
+    $('materialViewButton').disabled = !state.hasEstimatedMaterial;
     $('depthEditButton').classList.toggle('active', state.depthEditing);
     $('depthEditButton').setAttribute('aria-pressed', String(state.depthEditing));
     $('depthEditButton').disabled = state.depthBusy || !state.image;
@@ -642,11 +821,12 @@
     artboard.classList.toggle('depth-far', state.depthEditing && state.brushMode === 'far');
     artboard.classList.toggle('depth-preview', state.depthPreview);
     artboard.classList.toggle('normal-preview', state.normalPreview);
+    artboard.classList.toggle('material-preview', state.materialPreview);
     if (!state.depthEditing) $('depthBrushCursor').hidden = true;
     const brushDiameter = Math.min(artboard.clientWidth, artboard.clientHeight) * state.brushSize / 100;
     $('depthBrushCursor').style.width = `${brushDiameter}px`;
     $('depthBrushCursor').style.height = `${brushDiameter}px`;
-    $('stageTip').textContent = state.depthEditing ? '白＝手前、黒＝奥。イラスト上をなぞって深度を指定' : state.depthPreview ? '深度マップを表示中：白＝手前、黒＝奥' : state.normalPreview ? '法線マップを表示中：色が面の向きを表します' : state.compare ? '境界線をドラッグして調整前後を比較' : '選択した光源をクリック・ドラッグして移動';
+    $('stageTip').textContent = state.depthEditing ? '白＝手前、黒＝奥。イラスト上をなぞって深度を指定' : state.depthPreview ? '深度マップを表示中：白＝手前、黒＝奥' : state.normalPreview ? '法線マップを表示中：色が面の向きを表します' : state.materialPreview ? '材質マップ：紫＝マット、青＝光沢、黄＝金属感' : state.compare ? '境界線をドラッグして調整前後を比較' : '選択した光源をクリック・ドラッグして移動';
   }
 
   function render() {
@@ -669,11 +849,13 @@
     gl.uniform1f(uniforms.uGloss, state.gloss / 100);
     gl.uniform1f(uniforms.uRoughness, state.roughness / 100);
     gl.uniform1f(uniforms.uMetallic, state.metallic / 100);
+    gl.uniform1f(uniforms.uMaterialAuto, Number(state.materialAuto));
     gl.uniform1f(uniforms.uDepthStrength, state.depthStrength / 100);
     gl.uniform1f(uniforms.uCastStrength, state.castStrength / 100);
     gl.uniform1f(uniforms.uCastSoftness, state.castSoftness / 100);
     gl.uniform1f(uniforms.uShowDepth, Number(state.depthEditing || state.depthPreview));
     gl.uniform1f(uniforms.uShowNormal, Number(state.normalPreview));
+    gl.uniform1f(uniforms.uShowMaterial, Number(state.materialPreview));
     gl.uniform1f(uniforms.uAspect, canvas.width / canvas.height);
     gl.uniform1f(uniforms.uCompare, Number(state.compare));
     gl.uniform1f(uniforms.uBefore, Number(state.before));
@@ -720,20 +902,25 @@
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
     state.image = source;
     state.imageName = name;
+    state.materialAuto = true;
     state.depthEditing = false;
     state.depthPreview = false;
     state.normalPreview = false;
+    state.materialPreview = false;
     state.hasEstimatedDepth = false;
+    state.hasEstimatedMaterial = false;
     state.compare = false;
     state.before = false;
     $('projectName').textContent = name;
     $('canvasTitle').textContent = name;
     $('imageSize').textContent = `${width} × ${height} px`;
     initializeDepthMap();
+    buildMaterialMap();
     updateControlUI();
     fitArtboard();
     render();
     estimateDepth();
+    estimateMaterials();
   }
 
   function loadFile(file) {
@@ -818,6 +1005,7 @@
 
   sliderIds.forEach(id => $(id).addEventListener('input', event => {
     state[id] = Number(event.target.value);
+    if (materialControlIds.has(id)) state.materialAuto = false;
     if (lightKeys.includes(id)) saveSelectedLight();
     updateControlUI();
     render();
@@ -858,11 +1046,18 @@
   }));
   document.querySelectorAll('[data-material-preset]').forEach(button => button.addEventListener('click', () => {
     Object.assign(state, materialPresets[button.dataset.materialPreset]);
+    state.materialAuto = false;
     updateControlUI();
     render();
   }));
+  $('materialAutoButton').addEventListener('click', () => {
+    state.materialAuto = true;
+    updateControlUI();
+    render();
+  });
+  $('materialReestimateButton').addEventListener('click', estimateMaterials);
   $('resetButton').addEventListener('click', () => {
-    Object.assign(state, defaults, { compare: false, before: false, depthPreview: false, normalPreview: false, split: 0.5 });
+    Object.assign(state, defaults, { compare: false, before: false, depthPreview: false, normalPreview: false, materialPreview: false, split: 0.5 });
     state.lights = [{ ...lightDefaults }];
     state.selectedLightIndex = 0;
     state.depthEditing = false;
@@ -880,6 +1075,7 @@
     state.depthEditing = !state.depthEditing;
     state.depthPreview = false;
     state.normalPreview = false;
+    state.materialPreview = false;
     state.compare = false;
     state.before = false;
     lastPaintPoint = null;
@@ -894,6 +1090,7 @@
     if (state.depthBusy || !state.hasEstimatedDepth) return;
     state.depthPreview = !state.depthPreview;
     state.normalPreview = false;
+    state.materialPreview = false;
     state.depthEditing = false;
     state.compare = false;
     state.before = false;
@@ -905,6 +1102,18 @@
     state.normalPreview = !state.normalPreview;
     state.depthEditing = false;
     state.depthPreview = false;
+    state.materialPreview = false;
+    state.compare = false;
+    state.before = false;
+    updateControlUI();
+    render();
+  });
+  $('materialViewButton').addEventListener('click', () => {
+    if (!state.hasEstimatedMaterial) return;
+    state.materialPreview = !state.materialPreview;
+    state.depthEditing = false;
+    state.depthPreview = false;
+    state.normalPreview = false;
     state.compare = false;
     state.before = false;
     updateControlUI();
@@ -914,7 +1123,7 @@
   let pointerMode = null;
   artboard.addEventListener('pointerdown', event => {
     if (event.button !== 0 && event.pointerType === 'mouse') return;
-    if (state.depthPreview || state.normalPreview) return;
+    if (state.depthPreview || state.normalPreview || state.materialPreview) return;
     pointerMode = state.depthEditing ? 'depth' : state.compare ? 'split' : 'light';
     artboard.setPointerCapture(event.pointerId);
     if (pointerMode === 'split') setSplitFromEvent(event);
@@ -959,9 +1168,9 @@
     render();
   });
 
-  $('compareButton').addEventListener('click', () => { if (state.depthEditing || state.depthPreview || state.normalPreview) return; state.compare = !state.compare; state.before = false; updateControlUI(); render(); });
+  $('compareButton').addEventListener('click', () => { if (state.depthEditing || state.depthPreview || state.normalPreview || state.materialPreview) return; state.compare = !state.compare; state.before = false; updateControlUI(); render(); });
   const beforeButton = $('beforeButton');
-  const showBefore = () => { if (state.depthEditing || state.depthPreview || state.normalPreview) return; state.before = true; updateControlUI(); render(); };
+  const showBefore = () => { if (state.depthEditing || state.depthPreview || state.normalPreview || state.materialPreview) return; state.before = true; updateControlUI(); render(); };
   const hideBefore = () => { state.before = false; updateControlUI(); render(); };
   beforeButton.addEventListener('pointerdown', event => { beforeButton.setPointerCapture(event.pointerId); showBefore(); });
   beforeButton.addEventListener('pointerup', hideBefore);
@@ -989,11 +1198,13 @@
     const previousDepthEditing = state.depthEditing;
     const previousDepthPreview = state.depthPreview;
     const previousNormalPreview = state.normalPreview;
+    const previousMaterialPreview = state.materialPreview;
     state.compare = false;
     state.before = false;
     state.depthEditing = false;
     state.depthPreview = false;
     state.normalPreview = false;
+    state.materialPreview = false;
     render();
     canvas.toBlob(blob => {
       state.compare = previousCompare;
@@ -1001,6 +1212,7 @@
       state.depthEditing = previousDepthEditing;
       state.depthPreview = previousDepthPreview;
       state.normalPreview = previousNormalPreview;
+      state.materialPreview = previousMaterialPreview;
       render();
       if (!blob) { showToast('PNGを書き出せませんでした'); return; }
       const url = URL.createObjectURL(blob);
