@@ -32,3 +32,9 @@ node server.cjs
 立体感の調整は元画像の明暗から細かな凹凸を推定し、深度から生成した法線で大きな面の向きを補います。深度は単一画像から推定した相対的な奥行きです。実際の距離やレイヤーの奥行き情報ではないため、イラストの内容によっては手動修正が必要です。
 
 深度推定には [Depth Anything V2 Small](https://huggingface.co/onnx-community/depth-anything-v2-small) を [Transformers.js](https://huggingface.co/docs/transformers.js/) でブラウザ内実行します。
+
+## 今後の開発候補
+
+- 画像処理の WASM 化を検討し、処理速度と対応ブラウザを評価する。
+- 複数の光源を追加し、それぞれの色・強さ・位置を調整できるようにする。
+- 光源の奥行き位置を調整し、深度マップと組み合わせて陰影に反映する。
