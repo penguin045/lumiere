@@ -4,14 +4,14 @@
   const MAX_LIGHTS = 4;
   const lightKeys = ['x', 'y', 'intensity', 'spread', 'lightHeight', 'temperature', 'backlight'];
   const lightDefaults = { x: 0.68, y: 0.31, intensity: 80, spread: 65, lightHeight: 55, temperature: 5500, backlight: false };
-  const defaults = { ...lightDefaults, relief: 35, normalStrength: 100, shadow: 40, depthStrength: 45, castStrength: 0, castSoftness: 70 };
+  const defaults = { ...lightDefaults, relief: 35, normalStrength: 100, shadow: 40, contactStrength: 35, depthStrength: 45, castStrength: 0, castSoftness: 70 };
   const state = { ...defaults, lights: [{ ...lightDefaults }], selectedLightIndex: 0, compare: false, before: false, depthPreview: false, normalPreview: false, split: 0.5, image: null, imageName: 'サンプルイラスト', depthEditing: false, depthBusy: false, hasEstimatedDepth: false, brushMode: 'near', brushSize: 10 };
   const $ = (id) => document.getElementById(id);
   const canvas = $('canvas');
   const artboard = $('artboard');
   const stage = $('dropZone');
   const fileInput = $('fileInput');
-  const sliderIds = ['intensity', 'spread', 'lightHeight', 'temperature', 'relief', 'normalStrength', 'shadow', 'depthStrength', 'castStrength', 'castSoftness', 'brushSize'];
+  const sliderIds = ['intensity', 'spread', 'lightHeight', 'temperature', 'relief', 'normalStrength', 'shadow', 'contactStrength', 'depthStrength', 'castStrength', 'castSoftness', 'brushSize'];
   const castPresets = { natural: { castStrength: 0, castSoftness: 70 }, soft: { castStrength: 38, castSoftness: 78 }, dramatic: { castStrength: 90, castSoftness: 20 } };
   const depthCanvas = document.createElement('canvas');
   const depthContext = depthCanvas.getContext('2d');
@@ -49,6 +49,7 @@
     uniform float uRelief;
     uniform float uNormalStrength;
     uniform float uShadow;
+    uniform float uContactStrength;
     uniform float uDepthStrength;
     uniform float uCastStrength;
     uniform float uCastSoftness;
@@ -63,20 +64,43 @@
       vec4 p = texture2D(uImage, clamp(uv, vec2(0.0), vec2(1.0)));
       return dot(p.rgb, vec3(0.299, 0.587, 0.114)) * 0.76 + p.a * 0.24;
     }
+    float contactSample(vec2 uv, float receiverDepth) {
+      float separation = texture2D(uDepthMap, clamp(uv, vec2(0.0), vec2(1.0))).r - receiverDepth;
+      return smoothstep(0.018, 0.16, separation) * (1.0 - smoothstep(0.43, 0.76, separation));
+    }
+    float contactShadowAt(vec2 uv, float receiverDepth) {
+      vec2 nearStep = uTexel * 5.0;
+      vec2 farStep = uTexel * 15.0;
+      float nearby = contactSample(uv + vec2(nearStep.x, 0.0), receiverDepth)
+                   + contactSample(uv - vec2(nearStep.x, 0.0), receiverDepth)
+                   + contactSample(uv + vec2(0.0, nearStep.y), receiverDepth)
+                   + contactSample(uv - vec2(0.0, nearStep.y), receiverDepth);
+      float wider = contactSample(uv + vec2(farStep.x, 0.0), receiverDepth)
+                  + contactSample(uv - vec2(farStep.x, 0.0), receiverDepth)
+                  + contactSample(uv + vec2(0.0, farStep.y), receiverDepth)
+                  + contactSample(uv - vec2(0.0, farStep.y), receiverDepth);
+      return clamp((nearby * 0.7 + wider * 0.3) / 2.0, 0.0, 1.0);
+    }
     float castShadowAt(vec2 uv, float receiverDepth, vec2 lightPosition, float lightDepth) {
       float projection = 1.0 + mix(0.82, 0.12, lightDepth) * mix(0.55, 1.0, uCastStrength);
       vec2 sampleUv = lightPosition + (uv - lightPosition) / projection;
       if (sampleUv.x <= 0.0 || sampleUv.x >= 1.0 || sampleUv.y <= 0.0 || sampleUv.y >= 1.0) return 0.0;
-      float blocker = texture2D(uDepthMap, sampleUv).r;
-      if (uCastSoftness > 0.01) {
-        vec2 blur = vec2(uCastSoftness * 0.018 / uAspect, uCastSoftness * 0.018);
-        blocker = blocker * 0.4
-                + texture2D(uDepthMap, sampleUv + vec2(blur.x, 0.0)).r * 0.15
-                + texture2D(uDepthMap, sampleUv - vec2(blur.x, 0.0)).r * 0.15
-                + texture2D(uDepthMap, sampleUv + vec2(0.0, blur.y)).r * 0.15
-                + texture2D(uDepthMap, sampleUv - vec2(0.0, blur.y)).r * 0.15;
-      }
-      return smoothstep(0.17, 0.37 + uCastSoftness * 0.06, blocker - receiverDepth);
+      float blockerDepth = texture2D(uDepthMap, sampleUv).r;
+      if (uCastSoftness < 0.01) return smoothstep(0.13, 0.34, blockerDepth - receiverDepth);
+      float separation = max(blockerDepth - receiverDepth, 0.0);
+      float radius = uCastSoftness * (0.006 + separation * 0.045) * mix(1.2, 0.7, lightDepth);
+      vec2 blur = vec2(radius / uAspect, radius);
+      vec2 diagonal = blur * 0.7071;
+      float cardinal = texture2D(uDepthMap, sampleUv + vec2(blur.x, 0.0)).r
+                     + texture2D(uDepthMap, sampleUv - vec2(blur.x, 0.0)).r
+                     + texture2D(uDepthMap, sampleUv + vec2(0.0, blur.y)).r
+                     + texture2D(uDepthMap, sampleUv - vec2(0.0, blur.y)).r;
+      float corners = texture2D(uDepthMap, sampleUv + diagonal).r
+                    + texture2D(uDepthMap, sampleUv - diagonal).r
+                    + texture2D(uDepthMap, sampleUv + vec2(diagonal.x, -diagonal.y)).r
+                    + texture2D(uDepthMap, sampleUv + vec2(-diagonal.x, diagonal.y)).r;
+      float blurredDepth = blockerDepth * 0.4 + cardinal * 0.1 + corners * 0.05;
+      return smoothstep(0.12, 0.34 + uCastSoftness * 0.05, blurredDepth - receiverDepth);
     }
     float backlightOcclusionAt(vec2 uv, float receiverDepth, vec2 lightPosition, float lightDistance, vec2 edgeStep) {
       vec2 ray = lightPosition - uv;
@@ -191,6 +215,7 @@
       color = color * (1.0 - rearShare * 0.24)
             * (1.0 - blockedIntensity / max(frontIntensity, 0.001) * uCastStrength * (0.64 + uShadow * 0.25))
             + directColor;
+      if (uContactStrength > 0.001) color *= 1.0 - contactShadowAt(vUv, depth) * uContactStrength * 0.52;
       gl_FragColor = vec4(clamp(color, 0.0, 1.0), source.a);
     }
   `;
@@ -243,7 +268,7 @@
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 255, 255]));
     gl.activeTexture(gl.TEXTURE0);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    uniforms = Object.fromEntries(['uImage', 'uDepthMap', 'uNormalMap', 'uTexel', 'uLightCount', 'uRelief', 'uNormalStrength', 'uShadow', 'uDepthStrength', 'uCastStrength', 'uCastSoftness', 'uShowDepth', 'uShowNormal', 'uAspect', 'uCompare', 'uBefore', 'uSplit'].map(name => [name, gl.getUniformLocation(program, name)]));
+    uniforms = Object.fromEntries(['uImage', 'uDepthMap', 'uNormalMap', 'uTexel', 'uLightCount', 'uRelief', 'uNormalStrength', 'uShadow', 'uContactStrength', 'uDepthStrength', 'uCastStrength', 'uCastSoftness', 'uShowDepth', 'uShowNormal', 'uAspect', 'uCompare', 'uBefore', 'uSplit'].map(name => [name, gl.getUniformLocation(program, name)]));
     uniforms.uLightGeometry = gl.getUniformLocation(program, 'uLightGeometry[0]');
     uniforms.uLightAppearance = gl.getUniformLocation(program, 'uLightAppearance[0]');
     gl.uniform1i(uniforms.uImage, 0);
@@ -612,6 +637,7 @@
     gl.uniform1f(uniforms.uRelief, state.relief / 100);
     gl.uniform1f(uniforms.uNormalStrength, state.normalStrength / 100);
     gl.uniform1f(uniforms.uShadow, state.shadow / 100);
+    gl.uniform1f(uniforms.uContactStrength, state.contactStrength / 100);
     gl.uniform1f(uniforms.uDepthStrength, state.depthStrength / 100);
     gl.uniform1f(uniforms.uCastStrength, state.castStrength / 100);
     gl.uniform1f(uniforms.uCastSoftness, state.castSoftness / 100);
